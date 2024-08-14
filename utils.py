@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from torchvision.transforms import functional as F
 from PIL import Image
-from briarmbg import BriaRMBG
+from models.briarmbg import BriaRMBG
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 rmbg = BriaRMBG.from_pretrained("briaai/RMBG-1.4")
