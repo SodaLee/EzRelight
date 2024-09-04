@@ -121,7 +121,7 @@ def get_pipeline(
         pipeline.enable_xformers_memory_efficient_attention()
 
     gc.collect()
-    if device.type == 'cuda' and torch.cuda.is_available():
+    if str(device) == 'cuda' and torch.cuda.is_available():
         torch.cuda.empty_cache()
 
     return pipeline
