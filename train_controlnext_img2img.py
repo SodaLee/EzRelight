@@ -47,6 +47,7 @@ from diffusers import (
     AutoencoderKL,
     DDPMScheduler,
     UniPCMultistepScheduler,
+    ControlNetModel,
 )
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available, make_image_grid
@@ -55,9 +56,10 @@ from diffusers.utils.import_utils import is_torch_npu_available, is_xformers_ava
 from diffusers.utils.torch_utils import is_compiled_module
 
 from safetensors.torch import load_file, save_file
-from pipeline.pipeline_controlnext import StableDiffusionXLControlNeXtPipeline
-from models.controlnet import ControlNetModel
+from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
+from models.controlnet import ControlNetModel as ControlNext
 from models.unet import UNet2DConditionModel
+from args import parse_args
 
 if is_wandb_available():
     import wandb
@@ -70,14 +72,15 @@ if is_torch_npu_available():
     torch.npu.config.allow_internal_format = False
 
 
-def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step, is_final_validation=False):
+def log_validation(vae, unet, controlnet, controlnext, args, accelerator, weight_dtype, step, is_final_validation=False):
     logger.info("Running validation... ")
 
-    pipeline = StableDiffusionXLControlNeXtPipeline.from_pretrained(
+    pipeline = StableDiffusionXLControlNeXtImg2ImgPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         vae=vae,
         unet=unet,
         controlnet=controlnet,
+        controlnext=controlnext,
         safety_checker=None,
         revision=args.revision,
         variant=args.variant,
@@ -99,6 +102,7 @@ def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step,
     if len(args.validation_image) == len(args.validation_prompt):
         validation_images = args.validation_image
         validation_prompts = args.validation_prompt
+        bg_images = args.validation_bg_image
     elif len(args.validation_image) == 1:
         validation_images = args.validation_image * len(args.validation_prompt)
         validation_prompts = args.validation_prompt
@@ -116,9 +120,13 @@ def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step,
     else:
         autocast_ctx = torch.autocast(accelerator.device.type)
 
-    for validation_prompt, validation_image in zip(validation_prompts, validation_images):
+    for validation_prompt, validation_image, bg_image in zip(validation_prompts, validation_images, bg_images):
         validation_image = Image.open(validation_image).convert("RGB")
         validation_image = validation_image.resize((args.resolution, args.resolution))
+
+        bg_image = Image.open(bg_image).convert("RGB")
+        #bg_image = bg_image.resize((args.bg_resolution_x, args.bg_resolution_y))
+        bg_image = bg_image.resize((args.resolution, args.resolution))
 
         images = []
 
@@ -126,6 +134,7 @@ def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step,
             with autocast_ctx:
                 image = pipeline(
                     prompt=validation_prompt,
+                    control_image=bg_image,
                     controlnet_image=validation_image,
                     controlnet_scale_factor=args.controlnet_scale_factor,
                     num_inference_steps=20,
@@ -136,7 +145,7 @@ def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step,
             images.append(image)
 
         image_logs.append(
-            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt}
+            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt, "bg_image": bg_image}
         )
 
     sample_dir = os.path.join(args.output_dir, "samples", f"sample-{step}")
@@ -148,6 +157,7 @@ def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step,
                 images = log["images"]
                 validation_prompt = log["validation_prompt"]
                 validation_image = log["validation_image"]
+                bg_image = log["bg_image"]
 
                 formatted_images = []
 
@@ -155,6 +165,8 @@ def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step,
 
                 for image in images:
                     formatted_images.append(np.asarray(image))
+
+                formatted_images.append(np.asarray(bg_image))
 
                 formatted_images = np.stack(formatted_images)
 
@@ -166,12 +178,15 @@ def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step,
                 images = log["images"]
                 validation_prompt = log["validation_prompt"]
                 validation_image = log["validation_image"]
+                bg_image = log["bg_image"]
 
                 formatted_images.append(wandb.Image(validation_image, caption="Controlnet conditioning"))
 
                 for image in images:
                     image = wandb.Image(image, caption=validation_prompt)
                     formatted_images.append(image)
+                
+                formatted_images.append(wandb.Image(bg_image, caption="Background image"))
 
             tracker.log({tracker_key: formatted_images})
         else:
@@ -193,7 +208,7 @@ def log_validation(vae, unet, controlnet, args, accelerator, weight_dtype, step,
     return image_logs
 
 
-def save_models(unet, controlnet, output_dir, args, orig_unet_sd=None):
+def save_models(unet, controlnet, controlnext, output_dir, args, orig_unet_sd=None):
     os.makedirs(output_dir, exist_ok=True)
     unet_sd = unet.state_dict()
     pattern = re.compile(args.unet_trainable_param_pattern)
@@ -203,6 +218,7 @@ def save_models(unet, controlnet, output_dir, args, orig_unet_sd=None):
             unet_sd[k] = unet_sd[k].detach().cpu() - orig_unet_sd[k]
     save_file(unet_sd, os.path.join(output_dir, "unet_weight_increasements.safetensors"))
     save_file(controlnet.state_dict(), os.path.join(output_dir, "controlnet.safetensors"))
+    save_file(controlnext.state_dict(), os.path.join(output_dir, "controlnext.safetensors"))
 
 
 def import_model_class_from_model_name_or_path(
@@ -234,6 +250,8 @@ def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=N
             validation_prompt = log["validation_prompt"]
             validation_image = log["validation_image"]
             validation_image.save(os.path.join(repo_folder, "image_control.png"))
+            bg_image = log["bg_image"]
+            bg_image.save(os.path.join(repo_folder, "bg_image.png"))
             img_str += f"prompt: {validation_prompt}\n"
             images = [validation_image] + images
             make_image_grid(images, 1, len(images)).save(os.path.join(repo_folder, f"images_{i}.png"))
@@ -293,435 +311,6 @@ class LossRecorder:
         if len(self.losses) < window:
             window = len(self.losses)
         return sum(self.losses[-window:]) / window
-
-
-def parse_args(input_args=None):
-    parser = argparse.ArgumentParser(description="Simple example of a ControlNet training script.")
-    parser.add_argument(
-        "--pretrained_model_name_or_path",
-        type=str,
-        default=None,
-        required=True,
-        help="Path to pretrained model or model identifier from huggingface.co/models.",
-    )
-    parser.add_argument(
-        "--pretrained_vae_model_name_or_path",
-        type=str,
-        default=None,
-        help="Path to an improved VAE to stabilize training. For more details check out: https://github.com/huggingface/diffusers/pull/4038.",
-    )
-    parser.add_argument(
-        "--pretrained_unet_model_name_or_path",
-        type=str,
-        default=None,
-        help="Path to pretrained unet safetensors file if you want to continue training.",
-    )
-    parser.add_argument(
-        "--controlnet_model_name_or_path",
-        type=str,
-        default=None,
-        help="Path to pretrained controlnet safetensors file if you want to continue training.",
-    )
-    parser.add_argument(
-        "--variant",
-        type=str,
-        default=None,
-        help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16",
-    )
-    parser.add_argument(
-        "--revision",
-        type=str,
-        default=None,
-        required=False,
-        help="Revision of pretrained model identifier from huggingface.co/models.",
-    )
-    parser.add_argument(
-        "--use_safetensors",
-        action="store_true",
-        help="Whether or not to set use_safetensors=True for loading the pretrained model.",
-    )
-    parser.add_argument(
-        "--tokenizer_name",
-        type=str,
-        default=None,
-        help="Pretrained tokenizer name or path if not the same as model_name",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="controlnet-model",
-        help="The output directory where the model predictions and checkpoints will be written.",
-    )
-    parser.add_argument(
-        "--cache_dir",
-        type=str,
-        default=None,
-        help="The directory where the downloaded models and datasets will be stored.",
-    )
-    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
-    parser.add_argument(
-        "--resolution",
-        type=int,
-        default=512,
-        help=(
-            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
-            " resolution"
-        ),
-    )
-    parser.add_argument(
-        "--controlnet_scale_factor",
-        type=float,
-        default=1.0,
-        help=(
-            "The scale factor for the controlnet. This is used to scale the controlnet output before adding it to the unet output."
-            " For depth control, we recommend setting this to 1.0."
-            " For canny control, we recommend setting this to 0.35."
-        )
-    )
-    parser.add_argument(
-        "--save_weights_increaments",
-        type=bool,
-        default=False,
-        help="Save the unet weights in increaments",
-    )
-    parser.add_argument(
-        "--load_weights_increaments",
-        type=bool,
-        default=False,
-        help="Load the unet weights in increaments",
-    )
-    parser.add_argument(
-        "--crops_coords_top_left_h",
-        type=int,
-        default=0,
-        help=("Coordinate for (the height) to be included in the crop coordinate embeddings needed by SDXL UNet."),
-    )
-    parser.add_argument(
-        "--crops_coords_top_left_w",
-        type=int,
-        default=0,
-        help=("Coordinate for (the height) to be included in the crop coordinate embeddings needed by SDXL UNet."),
-    )
-    parser.add_argument(
-        "--train_batch_size", type=int, default=4, help="Batch size (per device) for the training dataloader."
-    )
-    parser.add_argument("--num_train_epochs", type=int, default=25)
-    parser.add_argument(
-        "--max_train_steps",
-        type=int,
-        default=None,
-        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
-    )
-    parser.add_argument(
-        "--checkpointing_steps",
-        type=int,
-        default=500,
-        help=(
-            "Save a checkpoint of the training state every X updates. Checkpoints can be used for resuming training via `--resume_from_checkpoint`. "
-            "In the case that the checkpoint is better than the final trained model, the checkpoint can also be used for inference."
-            "Using a checkpoint for inference requires separate loading of the original pipeline and the individual checkpointed model components."
-            "See https://huggingface.co/docs/diffusers/main/en/training/dreambooth#performing-inference-using-a-saved-checkpoint for step by step"
-            "instructions."
-        ),
-    )
-    parser.add_argument(
-        "--checkpoints_total_limit",
-        type=int,
-        default=None,
-        help=("Max number of checkpoints to store."),
-    )
-    parser.add_argument(
-        "--resume_from_checkpoint",
-        type=str,
-        default=None,
-        help=(
-            "Whether training should be resumed from a previous checkpoint. Use a path saved by"
-            ' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
-        ),
-    )
-    parser.add_argument(
-        "--gradient_accumulation_steps",
-        type=int,
-        default=1,
-        help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
-    parser.add_argument(
-        "--gradient_checkpointing",
-        action="store_true",
-        help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
-    )
-    parser.add_argument(
-        "--learning_rate",
-        type=float,
-        default=1e-5,
-        help="Initial learning rate (after the potential warmup period) to use.",
-    )
-    parser.add_argument(
-        "--unet_trainable_param_pattern",
-        type=str,
-        default=r".*attn2.*to_out.*",
-        help="Regex pattern to match the name of trainable parameters of the UNet.",
-    )
-    parser.add_argument(
-        "--learning_rate_controlnet",
-        type=float,
-        default=1e-4,
-        help="Initial learning rate (after the potential warmup period) to use for the controlnet.",
-    )
-    parser.add_argument(
-        "--scale_lr",
-        action="store_true",
-        default=False,
-        help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
-    )
-    parser.add_argument(
-        "--lr_scheduler",
-        type=str,
-        default="constant_with_warmup",
-        help=(
-            'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup"]'
-        ),
-    )
-    parser.add_argument(
-        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
-    )
-    parser.add_argument(
-        "--lr_num_cycles",
-        type=int,
-        default=1,
-        help="Number of hard resets of the lr in cosine_with_restarts scheduler.",
-    )
-    parser.add_argument("--lr_power", type=float, default=1.0, help="Power factor of the polynomial scheduler.")
-    parser.add_argument(
-        "--dataloader_num_workers",
-        type=int,
-        default=0,
-        help=(
-            "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
-        ),
-    )
-    parser.add_argument(
-        "--optimizer_type",
-        type=str,
-        default="adafactor",
-        help="The optimizer type to use. Choose between ['adamw', 'adafactor']",
-    )
-    parser.add_argument(
-        "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
-    )
-    parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
-    parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
-    parser.add_argument("--adafactor_relative_step", type=bool, default=False, help="Relative step size for Adafactor.")
-    parser.add_argument("--adafactor_scale_parameter", type=bool, default=False, help="Scale the initial parameter.")
-    parser.add_argument("--adafactor_warmup_init", type=bool, default=False, help="Warmup the initial parameter.")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
-    parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
-    parser.add_argument(
-        "--hub_model_id",
-        type=str,
-        default=None,
-        help="The name of the repository to keep in sync with the local `output_dir`.",
-    )
-    parser.add_argument(
-        "--logging_dir",
-        type=str,
-        default="logs",
-        help=(
-            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
-        ),
-    )
-    parser.add_argument(
-        "--allow_tf32",
-        action="store_true",
-        help=(
-            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
-            " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
-        ),
-    )
-    parser.add_argument(
-        "--report_to",
-        type=str,
-        default="tensorboard",
-        help=(
-            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
-            ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
-        ),
-    )
-    parser.add_argument(
-        "--mixed_precision",
-        type=str,
-        default=None,
-        choices=["no", "fp16", "bf16"],
-        help=(
-            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
-            " 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"
-            " flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
-        ),
-    )
-    parser.add_argument(
-        "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
-    )
-    parser.add_argument(
-        "--enable_npu_flash_attention", action="store_true", help="Whether or not to use npu flash attention."
-    )
-    parser.add_argument(
-        "--set_grads_to_none",
-        action="store_true",
-        help=(
-            "Save more memory by using setting grads to None instead of zero. Be aware, that this changes certain"
-            " behaviors, so disable this argument if it causes any problems. More info:"
-            " https://pytorch.org/docs/stable/generated/torch.optim.Optimizer.zero_grad.html"
-        ),
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default=None,
-        help=(
-            "The name of the Dataset (from the HuggingFace hub) to train on (could be your own, possibly private,"
-            " dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"
-            " or to a folder containing files that 🤗 Datasets can understand."
-        ),
-    )
-    parser.add_argument(
-        "--dataset_config_name",
-        type=str,
-        default=None,
-        help="The config of the Dataset, leave as None if there's only one config.",
-    )
-    parser.add_argument(
-        "--train_data_dir",
-        type=str,
-        default=None,
-        help=(
-            "A folder containing the training data. Folder contents must follow the structure described in"
-            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
-            " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
-        ),
-    )
-    parser.add_argument(
-        "--image_column", type=str, default="image", help="The column of the dataset containing the target image."
-    )
-    parser.add_argument(
-        "--conditioning_image_column",
-        type=str,
-        default="conditioning_image",
-        help="The column of the dataset containing the controlnet conditioning image.",
-    )
-    parser.add_argument(
-        "--caption_column",
-        type=str,
-        default="text",
-        help="The column of the dataset containing a caption or a list of captions.",
-    )
-    parser.add_argument(
-        "--max_train_samples",
-        type=int,
-        default=None,
-        help=(
-            "For debugging purposes or quicker training, truncate the number of training examples to this "
-            "value if set."
-        ),
-    )
-    parser.add_argument(
-        "--proportion_empty_prompts",
-        type=float,
-        default=0,
-        help="Proportion of image prompts to be replaced with empty strings. Defaults to 0 (no prompt replacement).",
-    )
-    parser.add_argument(
-        "--validation_prompt",
-        type=str,
-        default=None,
-        nargs="+",
-        help=(
-            "A set of prompts evaluated every `--validation_steps` and logged to `--report_to`."
-            " Provide either a matching number of `--validation_image`s, a single `--validation_image`"
-            " to be used with all prompts, or a single prompt that will be used with all `--validation_image`s."
-        ),
-    )
-    parser.add_argument(
-        "--validation_image",
-        type=str,
-        default=None,
-        nargs="+",
-        help=(
-            "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
-            " and logged to `--report_to`. Provide either a matching number of `--validation_prompt`s, a"
-            " a single `--validation_prompt` to be used with all `--validation_image`s, or a single"
-            " `--validation_image` that will be used with all `--validation_prompt`s."
-        ),
-    )
-    parser.add_argument(
-        "--num_validation_images",
-        type=int,
-        default=4,
-        help="Number of images to be generated for each `--validation_image`, `--validation_prompt` pair",
-    )
-    parser.add_argument(
-        "--validation_steps",
-        type=int,
-        default=100,
-        help=(
-            "Run validation every X steps. Validation consists of running the prompt"
-            " `args.validation_prompt` multiple times: `args.num_validation_images`"
-            " and logging the images."
-        ),
-    )
-    parser.add_argument(
-        "--tracker_project_name",
-        type=str,
-        default="sd_xl_train_controlnet",
-        help=(
-            "The `project_name` argument passed to Accelerator.init_trackers for"
-            " more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator"
-        ),
-    )
-
-    if input_args is not None:
-        args = parser.parse_args(input_args)
-    else:
-        args = parser.parse_args()
-
-    if args.dataset_name is None and args.train_data_dir is None:
-        raise ValueError("Specify either `--dataset_name` or `--train_data_dir`")
-
-    if args.dataset_name is not None and args.train_data_dir is not None:
-        raise ValueError("Specify only one of `--dataset_name` or `--train_data_dir`")
-
-    if args.proportion_empty_prompts < 0 or args.proportion_empty_prompts > 1:
-        raise ValueError("`--proportion_empty_prompts` must be in the range [0, 1].")
-
-    if args.validation_prompt is not None and args.validation_image is None:
-        raise ValueError("`--validation_image` must be set if `--validation_prompt` is set")
-
-    if args.validation_prompt is None and args.validation_image is not None:
-        raise ValueError("`--validation_prompt` must be set if `--validation_image` is set")
-
-    if (
-        args.validation_image is not None
-        and args.validation_prompt is not None
-        and len(args.validation_image) != 1
-        and len(args.validation_prompt) != 1
-        and len(args.validation_image) != len(args.validation_prompt)
-    ):
-        raise ValueError(
-            "Must provide either 1 `--validation_image`, 1 `--validation_prompt`,"
-            " or the same number of `--validation_prompt`s and `--validation_image`s"
-        )
-
-    if args.resolution % 8 != 0:
-        raise ValueError(
-            "`--resolution` must be divisible by 8 for consistently sized encoded images between the VAE and the controlnet encoder."
-        )
-
-    return args
-
 
 def get_train_dataset(args, accelerator):
     # Get the datasets: you can either provide your own training and evaluation files (see below)
@@ -785,6 +374,16 @@ def get_train_dataset(args, accelerator):
         if conditioning_image_column not in column_names:
             raise ValueError(
                 f"`--conditioning_image_column` value '{args.conditioning_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
+            )
+    
+    if args.bg_image_column is None:
+        bg_image_column = column_names[3]
+        logger.info(f"background image column defaulting to {bg_image_column}")
+    else:
+        bg_image_column = args.bg_image_column
+        if bg_image_column not in column_names:
+            raise ValueError(
+                f"`--bg_image_column` value '{args.bg_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
 
     with accelerator.main_process_first():
@@ -860,8 +459,12 @@ def prepare_train_dataset(dataset, accelerator):
         conditioning_images = [image.convert("RGB") for image in examples[args.conditioning_image_column]]
         conditioning_images = [conditioning_image_transforms(image) for image in conditioning_images]
 
+        bg_images = [image.convert("RGB") for image in examples[args.bg_image_column]]
+        bg_images = [conditioning_image_transforms(image) for image in bg_images]
+
         examples["pixel_values"] = images
         examples["conditioning_pixel_values"] = conditioning_images
+        examples["bg_pixel_values"] = bg_images
 
         return examples
 
@@ -878,6 +481,9 @@ def collate_fn(examples):
     conditioning_pixel_values = torch.stack([example["conditioning_pixel_values"] for example in examples])
     conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
 
+    bg_pixel_values = torch.stack([example["bg_pixel_values"] for example in examples])
+    bg_pixel_values = bg_pixel_values.to(memory_format=torch.contiguous_format).float()
+
     prompt_ids = torch.stack([torch.tensor(example["prompt_embeds"]) for example in examples])
 
     add_text_embeds = torch.stack([torch.tensor(example["text_embeds"]) for example in examples])
@@ -886,6 +492,7 @@ def collate_fn(examples):
     return {
         "pixel_values": pixel_values,
         "conditioning_pixel_values": conditioning_pixel_values,
+        "bg_pixel_values": bg_pixel_values,
         "prompt_ids": prompt_ids,
         "unet_added_conditions": {"text_embeds": add_text_embeds, "time_ids": add_time_ids},
     }
@@ -1017,12 +624,19 @@ def main(args):
         logger.info("Initializing unet weights from scratch")
         pass
 
-    controlnet = ControlNetModel()
+    controlnet = ControlNetModel.from_unet(unet)
     if args.controlnet_model_name_or_path:
         logger.info("Loading existing controlnet weights")
         controlnet.load_state_dict(load_file(args.controlnet_model_name_or_path))
     else:
         logger.info("Initializing controlnet weights from scratch")
+
+    controlnext = ControlNext()
+    if args.controlnext_model_name_or_path:
+        logger.info("Loading existing controlnext weights")
+        controlnext.load_state_dict(load_file(args.controlnext_model_name_or_path))
+    else:
+        logger.info("Initializing controlnext weights from scratch")
 
     def unwrap_model(model):
         model = accelerator.unwrap_model(model)
@@ -1051,12 +665,14 @@ def main(args):
                 )
             unet.enable_xformers_memory_efficient_attention()
             controlnet.enable_xformers_memory_efficient_attention()
+            controlnext.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
         controlnet.enable_gradient_checkpointing()
+        controlnext.enable_gradient_checkpointing()
 
     # Check that all trainable models are in full precision
     low_precision_error_string = (
@@ -1067,6 +683,11 @@ def main(args):
     if unwrap_model(controlnet).dtype != torch.float32:
         raise ValueError(
             f"Controlnet loaded as datatype {unwrap_model(controlnet).dtype}. {low_precision_error_string}"
+        )
+    
+    if unwrap_model(controlnext).dtype != torch.float32:
+        raise ValueError(
+            f"Controlnext loaded as datatype {unwrap_model(controlnext).dtype}. {low_precision_error_string}"
         )
 
     # Enable TF32 for faster training on Ampere GPUs,
@@ -1080,6 +701,9 @@ def main(args):
         )
         args.learning_rate_controlnet = (
             args.learning_rate_controlnet * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
+        )
+        args.learning_rate_controlnext = (
+            args.learning_rate_controlnext * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
         )
 
     # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
@@ -1116,6 +740,11 @@ def main(args):
     params_to_optimize = [{'params': list(controlnet.parameters()), 'lr': args.learning_rate_controlnet}]
     logger.info(f"Number of trainable parameters in controlnet: {sum(p.numel() for p in controlnet.parameters() if p.requires_grad)}")
 
+    controlnext.train()
+    controlnext.requires_grad_(True)
+    params_to_optimize = [{'params': list(controlnext.parameters()), 'lr': args.learning_rate_controlnext}]
+    logger.info(f"Number of trainable parameters in controlnext: {sum(p.numel() for p in controlnext.parameters() if p.requires_grad)}")
+
     unet.train()
     unet.requires_grad_(True)
     unet_params = []
@@ -1150,6 +779,7 @@ def main(args):
         vae.to(accelerator.device, dtype=torch.float32)
     unet.to(accelerator.device, dtype=weight_dtype)
     controlnet = controlnet.to(accelerator.device, dtype=torch.float32)
+    controlnext = controlnext.to(accelerator.device, dtype=torch.float32)
     text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
 
@@ -1234,8 +864,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    unet, controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, controlnet, optimizer, train_dataloader, lr_scheduler
+    unet, controlnet, controlnext, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        unet, controlnet, controlnext, optimizer, train_dataloader, lr_scheduler
     )
 
     patch_accelerator_for_fp16_training(accelerator)
@@ -1261,6 +891,7 @@ def main(args):
         # tensorboard cannot handle list types for config
         tracker_config.pop("validation_prompt")
         tracker_config.pop("validation_image")
+        tracker_config.pop("bg_image")
 
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
 
@@ -1328,7 +959,7 @@ def main(args):
     image_logs = None
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, controlnet):
+            with accelerator.accumulate(unet, controlnet, controlnext):
                 # Convert images to latent space
                 if args.pretrained_vae_model_name_or_path is not None:
                     pixel_values = batch["pixel_values"].to(dtype=weight_dtype)
@@ -1351,13 +982,24 @@ def main(args):
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # ControlNet conditioning.
-                controlnet_image = batch["conditioning_pixel_values"].to(accelerator.device, dtype=controlnet.dtype)
-                controls = controlnet(
-                    controlnet_image,
+                control_image = batch["bg_pixel_values"].to(accelerator.device, dtype=controlnet.dtype)
+                down_block_res_samples, mid_block_res_sample = controlnet(
+                    noisy_latents,
+                    timesteps,
+                    encoder_hidden_states=batch["prompt_ids"],
+                    controlnet_cond=control_image,
+                    conditioning_scale=[1.0],
+                    added_cond_kwargs=batch["unet_added_conditions"],
+                    return_dict=False,
+                )
+
+                # ControlNext conditioning.
+                controlnext_image = batch["conditioning_pixel_values"].to(accelerator.device, dtype=controlnext.dtype)
+                controls = controlnext(
+                    controlnext_image,
                     timesteps,
                 )
-                controls['scale'] *= args.controlnet_scale_factor
+                controls['scale'] *= args.controlnext_scale_factor
 
                 # Predict the noise residual
                 with accelerator.autocast():
@@ -1366,6 +1008,8 @@ def main(args):
                         timesteps,
                         encoder_hidden_states=batch["prompt_ids"],
                         added_cond_kwargs=batch["unet_added_conditions"],
+                        down_block_additional_residuals=down_block_res_samples,
+                        mid_block_additional_residual=mid_block_res_sample,
                         controls=controls,
                         return_dict=False,
                     )[0]
@@ -1421,6 +1065,7 @@ def main(args):
                         save_models(
                             accelerator.unwrap_model(unet),
                             accelerator.unwrap_model(controlnet),
+                            accelerator.unwrap_model(controlnext),
                             save_path,
                             args,
                         )
@@ -1431,6 +1076,7 @@ def main(args):
                             vae=vae,
                             unet=accelerator.unwrap_model(unet),
                             controlnet=accelerator.unwrap_model(controlnet),
+                            controlnext=accelerator.unwrap_model(controlnext),
                             args=args,
                             accelerator=accelerator,
                             weight_dtype=weight_dtype,
@@ -1455,6 +1101,7 @@ def main(args):
         save_models(
             accelerator.unwrap_model(unet),
             accelerator.unwrap_model(controlnet),
+            accelerator.unwrap_model(controlnext),
             save_path,
             args,
             orig_unet_sd if args.save_weights_increaments else None,
@@ -1468,6 +1115,7 @@ def main(args):
                 vae=vae,
                 unet=accelerator.unwrap_model(unet),
                 controlnet=accelerator.unwrap_model(controlnet),
+                controlnext=accelerator.unwrap_model(controlnext),
                 args=args,
                 accelerator=accelerator,
                 weight_dtype=weight_dtype,
