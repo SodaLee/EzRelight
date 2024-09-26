@@ -554,36 +554,6 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
 
         return state_dict
 
-    def prepare_image(
-        self,
-        image,
-        width,
-        height,
-        batch_size,
-        num_images_per_prompt,
-        device,
-        dtype,
-        do_classifier_free_guidance=False,
-        guess_mode=False,
-    ):
-        image = self.control_image_processor.preprocess(image, height=height, width=width).to(dtype=torch.float32)
-        image_batch_size = image.shape[0]
-
-        if image_batch_size == 1:
-            repeat_by = batch_size
-        else:
-            # image batch size is the same as prompt batch size
-            repeat_by = num_images_per_prompt
-
-        image = image.repeat_interleave(repeat_by, dim=0)
-
-        image = image.to(device=device, dtype=dtype)
-
-        if do_classifier_free_guidance and not guess_mode:
-            image = torch.cat([image] * 2)
-
-        return image
-
     # Copied from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl.StableDiffusionXLPipeline.encode_prompt
     def encode_prompt(
         self,
@@ -1809,7 +1779,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         add_time_ids = add_time_ids.to(device)
 
         if controlnet_image is not None and self.controlnext is not None:
-            controlnet_image = self.prepare_image(
+            controlnet_image = self.prepare_control_image(
                 controlnet_image,
                 width,
                 height,

@@ -1,0 +1,21 @@
+CUDA_VISIBLE_DEVICES="0,1,2,3" \
+accelerate launch train_controlnext.py --pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
+--pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
+--variant fp16 \
+--use_safetensors \
+--output_dir "train/example" \
+--logging_dir "logs" \
+--resolution 1024 \
+--gradient_checkpointing \
+--set_grads_to_none \
+--proportion_empty_prompts 0.2 \
+--controlnet_scale_factor 1.0 \ # the strength of the controlnet output. For depth, we recommend 1.0, and for canny, we recommend 0.35
+--save_weights_increaments \
+--mixed_precision fp16 \
+--enable_xformers_memory_efficient_attention \
+--dataset_name "Nahrawy/VIDIT-Depth-ControlNet" \
+--image_column "image" \
+--conditioning_image_column "depth_map" \
+--caption_column "caption" \
+--validation_prompt "a stone tower on a rocky island" \
+--validation_image "examples/vidit_depth/condition_0.png"
