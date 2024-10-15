@@ -25,32 +25,27 @@ def canny_extractor(image: Image.Image, threshold1=None, threshold2=None) -> Ima
     return edges
 
 
-def depth_extractor(image: Image.Image, model):
+def depth_extractor(image, f_px, model):
     """
-    import torch
-    from depth_anything_v2.dpt import DepthAnythingV2
-    
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+    from PIL import Image
+    import depth_pro
 
-    model_configs = {
-        'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
-        'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
-        'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
-        'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
-    }
+    # Load model and preprocessing transform
+    model, transform = depth_pro.create_model_and_transforms()
+    model.eval()
 
-    encoder = 'vitl' # or 'vits', 'vitb', 'vitg'
+    # Load and preprocess an image.
+    image, _, f_px = depth_pro.load_rgb(image_path)
+    image = transform(image)
 
-    model = DepthAnythingV2(**model_configs[encoder])
-    model.load_state_dict(torch.load(f'checkpoints/depth_anything_v2_{encoder}.pth', map_location='cpu'))
-    model = model.to(DEVICE).eval()
+    # Run inference.
+    prediction = model.infer(image, f_px=f_px)
+    depth = prediction["depth"]  # Depth in [m].
+    focallength_px = prediction["focallength_px"]  # Focal length in pixels.
     """
     
-    # raw_img = cv2.imread('your/image/path')
-    raw_img = np.array(image)
-    depth = model.infer_image(raw_img) # HxW raw depth map in numpy
-    depth = Image.fromarray(depth.astype('uint16'))
-    return 
+    prediction = model.infer(image, f_px=f_px)
+    return prediction
 
 
 def pose_extractor(image: Image.Image):
