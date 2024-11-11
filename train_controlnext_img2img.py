@@ -31,6 +31,7 @@ import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 import transformers
+import cv2
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, ProjectConfiguration, set_seed
@@ -66,6 +67,9 @@ if is_wandb_available():
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 # check_min_version("0.31.0.dev0")
+
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1" 
+os.environ["OPENCV_IMGCODECS_USE_OPENEXR"] = "1"
 
 logger = get_logger(__name__)
 if is_torch_npu_available():
@@ -452,21 +456,41 @@ def prepare_train_dataset(dataset, accelerator):
         ]
     )
 
+    bg_image_transforms = transforms.Compose(
+        [
+            transforms.Resize(size=None, max_size=args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.ToTensor(),
+        ]
+    )
+
     def preprocess_train(examples):
-        images = [image.convert("RGB") for image in examples[args.image_column]]
-        images = [image_transforms(image) for image in images]
+        source = [cv2.imread(source, cv2.IMREAD_UNCHANGED) for source in examples['source']]
+        source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
+        source = [conditioning_image_transforms(s) for s in source]
 
-        conditioning_images = [image.convert("RGB") for image in examples[args.conditioning_image_column]]
-        conditioning_images = [conditioning_image_transforms(image) for image in conditioning_images]
+        target = [cv2.imread(target, cv2.IMREAD_UNCHANGED) for target in examples['target']]
+        target = [cv2.cvtColor(t, cv2.COLOR_BGR2RGB) for t in target]
+        target = [image_transforms(t) for t in target]
 
-        bg_images = [image.convert("RGB") for image in examples[args.bg_image_column]]
-        bg_images = [conditioning_image_transforms(image) for image in bg_images]
+        mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
+        mask = [1 - np.all(m == [191,191,191], axis=-1).astype(np.uint8) for m in mask]
+        mask = [np.expand_dims(m, axis=-1) for m in mask]
+        mask = [conditioning_image_transforms(m) for m in mask]
 
-        examples["pixel_values"] = images
-        examples["conditioning_pixel_values"] = conditioning_images
-        examples["bg_pixel_values"] = bg_images
+        depth = [np.load(depth) for depth in examples['depth']]
+        depth = [np.expand_dims(d, axis=-1) for d in depth]
+        depth = [conditioning_image_transforms(d) for d in depth]
 
-        return examples
+        lighting = [cv2.imread(lighting, cv2.IMREAD_UNCHANGED) for lighting in examples['lighting']]
+        lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
+        lighting = [np.roll(l, -int(l.shape[1] * phi / 2), 1) for l, phi in zip(lighting, examples['phi'])]
+        lighting = [bg_image_transforms(l) for l in lighting]
+
+        examples['source'] = source
+        examples['target'] = target
+        examples['mask'] = mask
+        examples['depth'] = depth
+        examples['lighting'] = lighting
 
     with accelerator.main_process_first():
         dataset = dataset.with_transform(preprocess_train)
@@ -475,14 +499,20 @@ def prepare_train_dataset(dataset, accelerator):
 
 
 def collate_fn(examples):
-    pixel_values = torch.stack([example["pixel_values"] for example in examples])
-    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+    source = torch.stack([example["source"] for example in examples])
+    source = source.to(memory_format=torch.contiguous_format).float()
 
-    conditioning_pixel_values = torch.stack([example["conditioning_pixel_values"] for example in examples])
-    conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
+    target = torch.stack([example["target"] for example in examples])
+    target = target.to(memory_format=torch.contiguous_format).float()
 
-    bg_pixel_values = torch.stack([example["bg_pixel_values"] for example in examples])
-    bg_pixel_values = bg_pixel_values.to(memory_format=torch.contiguous_format).float()
+    mask = torch.stack([example["mask"] for example in examples])
+    mask = mask.to(memory_format=torch.contiguous_format).float()
+
+    depth = torch.stack([example["depth"] for example in examples])
+    depth = depth.to(memory_format=torch.contiguous_format).float()
+
+    lighting = torch.stack([example["lighting"] for example in examples])
+    lighting = lighting.to(memory_format=torch.contiguous_format).float()
 
     prompt_ids = torch.stack([torch.tensor(example["prompt_embeds"]) for example in examples])
 
@@ -490,9 +520,11 @@ def collate_fn(examples):
     add_time_ids = torch.stack([torch.tensor(example["time_ids"]) for example in examples])
 
     return {
-        "pixel_values": pixel_values,
-        "conditioning_pixel_values": conditioning_pixel_values,
-        "bg_pixel_values": bg_pixel_values,
+        "source": source,
+        "target": target,
+        "mask": mask,
+        "depth": depth,
+        "lighting": lighting,
         "prompt_ids": prompt_ids,
         "unet_added_conditions": {"text_embeds": add_text_embeds, "time_ids": add_time_ids},
     }
@@ -962,9 +994,9 @@ def main(args):
             with accelerator.accumulate(unet, controlnet, controlnext):
                 # Convert images to latent space
                 if args.pretrained_vae_model_name_or_path is not None:
-                    pixel_values = batch["pixel_values"].to(dtype=weight_dtype)
+                    pixel_values = (batch["target"]*batch["mask"]).to(dtype=weight_dtype)
                 else:
-                    pixel_values = batch["pixel_values"]
+                    pixel_values = (batch["target"]*batch["mask"])
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
@@ -982,7 +1014,7 @@ def main(args):
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                control_image = batch["bg_pixel_values"].to(accelerator.device, dtype=controlnet.dtype)
+                control_image = batch["lighting"].to(accelerator.device, dtype=controlnet.dtype)
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
                     timesteps,
@@ -994,7 +1026,9 @@ def main(args):
                 )
 
                 # ControlNext conditioning.
-                controlnext_image = batch["conditioning_pixel_values"].to(accelerator.device, dtype=controlnext.dtype)
+                controlnext_image = batch["depth"].to(accelerator.device, dtype=controlnext.dtype)
+                ref_image = (batch["source"]*batch["mask"]).to(accelerator.device, dtype=controlnext.dtype)
+                controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
                 controls = controlnext(
                     controlnext_image,
                     timesteps,
