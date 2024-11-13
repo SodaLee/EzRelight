@@ -1,5 +1,6 @@
-CUDA_VISIBLE_DEVICES="0,1,2,3" \
-accelerate launch train_controlnext.py --pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
+CUDA_VISIBLE_DEVICES="2,3" \
+accelerate launch train_controlnext_img2img.py \
+--pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
 --variant fp16 \
 --use_safetensors \
@@ -9,13 +10,11 @@ accelerate launch train_controlnext.py --pretrained_model_name_or_path "stabilit
 --gradient_checkpointing \
 --set_grads_to_none \
 --proportion_empty_prompts 0.2 \
---controlnet_scale_factor 1.0 \ # the strength of the controlnet output. For depth, we recommend 1.0, and for canny, we recommend 0.35
+--controlnet_scale_factor 1.0 \
 --save_weights_increaments \
 --mixed_precision fp16 \
 --enable_xformers_memory_efficient_attention \
---dataset_name "Nahrawy/VIDIT-Depth-ControlNet" \
---image_column "image" \
---conditioning_image_column "depth_map" \
---caption_column "caption" \
---validation_prompt "a stone tower on a rocky island" \
---validation_image "examples/vidit_depth/condition_0.png"
+--dataset_name "/data/lihaochen/projects/EzRelight" \
+--data_files "stage1.parquet" \
+--cache_dir "/data3/lihaochen/BGRelight/stage1_cache" \
+--caption_column "caption"

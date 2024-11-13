@@ -40,6 +40,7 @@ from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from PIL import Image
 from torchvision import transforms
+from torchvision.transforms import v2
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
 
@@ -134,12 +135,14 @@ def log_validation(vae, unet, controlnet, controlnext, args, accelerator, weight
 
         images = []
 
+        # bg_image -> lighting
+        # validation_image -> [depth, source*mask]
         for _ in range(args.num_validation_images):
             with autocast_ctx:
                 image = pipeline(
                     prompt=validation_prompt,
                     control_image=bg_image,
-                    controlnet_image=validation_image,
+                    controlnext_image=validation_image,
                     controlnet_scale_factor=args.controlnet_scale_factor,
                     num_inference_steps=20,
                     generator=generator,
@@ -328,7 +331,8 @@ def get_train_dataset(args, accelerator):
                 # Downloading and loading a dataset from the hub.
                 dataset = load_dataset(
                     args.dataset_name,
-                    args.dataset_config_name,
+                    #args.dataset_config_name,
+                    data_files=args.data_files,
                     cache_dir=args.cache_dir,
                 )
             else:
@@ -350,45 +354,12 @@ def get_train_dataset(args, accelerator):
     column_names = dataset["train"].column_names
 
     # 6. Get the column names for input/target.
-    if args.image_column is None:
-        image_column = column_names[0]
-        logger.info(f"image column defaulting to {image_column}")
-    else:
-        image_column = args.image_column
-        if image_column not in column_names:
-            raise ValueError(
-                f"`--image_column` value '{args.image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
-
-    if args.caption_column is None:
-        caption_column = column_names[1]
-        logger.info(f"caption column defaulting to {caption_column}")
-    else:
-        caption_column = args.caption_column
-        if caption_column not in column_names:
-            raise ValueError(
-                f"`--caption_column` value '{args.caption_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
-
-    if args.conditioning_image_column is None:
-        conditioning_image_column = column_names[2]
-        logger.info(f"conditioning image column defaulting to {conditioning_image_column}")
-    else:
-        conditioning_image_column = args.conditioning_image_column
-        if conditioning_image_column not in column_names:
-            raise ValueError(
-                f"`--conditioning_image_column` value '{args.conditioning_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
-    
-    if args.bg_image_column is None:
-        bg_image_column = column_names[3]
-        logger.info(f"background image column defaulting to {bg_image_column}")
-    else:
-        bg_image_column = args.bg_image_column
-        if bg_image_column not in column_names:
-            raise ValueError(
-                f"`--bg_image_column` value '{args.bg_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
+    logger.info(f"image column defaulting to 'target'")
+    logger.info(f"mask column defaulting to 'mask'")
+    logger.info(f"depth column defaulting to 'depth'")
+    logger.info(f"lighting column defaulting to 'lighting'")
+    logger.info(f"source column defaulting to 'source'")
+    logger.info(f"caption column defaulting to 'caption'")
 
     with accelerator.main_process_first():
         train_dataset = dataset["train"].shuffle(seed=args.seed)
@@ -439,27 +410,28 @@ def encode_prompt(prompt_batch, text_encoders, tokenizers, proportion_empty_prom
 
 
 def prepare_train_dataset(dataset, accelerator):
-    image_transforms = transforms.Compose(
+    image_transforms = v2.Compose(
         [
-            transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(args.resolution),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
+            v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
+            v2.CenterCrop(args.resolution),
+            v2.ToTensor(),
+            v2.Normalize([0.5], [0.5]),
+        ]
+    )
+    
+    conditioning_image_transforms = v2.Compose(
+        [
+            v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
+            v2.CenterCrop(args.resolution),
+            v2.ToTensor(),
         ]
     )
 
-    conditioning_image_transforms = transforms.Compose(
+    bg_image_transforms = v2.Compose(
         [
-            transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(args.resolution),
-            transforms.ToTensor(),
-        ]
-    )
-
-    bg_image_transforms = transforms.Compose(
-        [
-            transforms.Resize(size=None, max_size=args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.ToTensor(),
+            v2.ToTensor(),
+            v2.Resize(size=args.resolution // 2, max_size=args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
+            v2.Pad([0, 256], fill=0.25, padding_mode='constant'),
         ]
     )
 
@@ -486,15 +458,21 @@ def prepare_train_dataset(dataset, accelerator):
         lighting = [np.roll(l, -int(l.shape[1] * phi / 2), 1) for l, phi in zip(lighting, examples['phi'])]
         lighting = [bg_image_transforms(l) for l in lighting]
 
+        # phi = [torch.tensor(phi) for phi in examples['phi']]
+
         examples['source'] = source
         examples['target'] = target
         examples['mask'] = mask
         examples['depth'] = depth
         examples['lighting'] = lighting
+        
+        return examples
 
     with accelerator.main_process_first():
         dataset = dataset.with_transform(preprocess_train)
 
+    dataset = dataset.remove_columns(["person"])
+    
     return dataset
 
 
@@ -927,16 +905,16 @@ def main(args):
 
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
 
-    def patch_accelerator_for_fp16_training(accelerator):
-        org_unscale_grads = accelerator.scaler._unscale_grads_
+    # def patch_accelerator_for_fp16_training(accelerator):
+    #     org_unscale_grads = accelerator.scaler._unscale_grads_
 
-        def _unscale_grads_replacer(optimizer, inv_scale, found_inf, allow_fp16):
-            return org_unscale_grads(optimizer, inv_scale, found_inf, True)
+    #     def _unscale_grads_replacer(optimizer, inv_scale, found_inf, allow_fp16):
+    #         return org_unscale_grads(optimizer, inv_scale, found_inf, True)
 
-        accelerator.scaler._unscale_grads_ = _unscale_grads_replacer
+    #     accelerator.scaler._unscale_grads_ = _unscale_grads_replacer
 
-    if args.mixed_precision == "fp16":
-        patch_accelerator_for_fp16_training(accelerator)
+    # if args.mixed_precision == "fp16":
+    #     patch_accelerator_for_fp16_training(accelerator)
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps

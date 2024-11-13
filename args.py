@@ -107,13 +107,13 @@ def parse_args(input_args=None):
     )
     parser.add_argument(
         "--save_weights_increaments",
-        type=bool,
+        action="store_true",
         default=False,
         help="Save the unet weights in increaments",
     )
     parser.add_argument(
         "--load_weights_increaments",
-        type=bool,
+        action="store_true",
         default=False,
         help="Load the unet weights in increaments",
     )
@@ -320,6 +320,12 @@ def parse_args(input_args=None):
             " dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"
             " or to a folder containing files that 🤗 Datasets can understand."
         ),
+    )
+    parser.add_argument(
+        "--data_files",
+        type=str,
+        default=None,
+        help="Data files to train on. e.g. stage1.parquet, stage2.parquet, stage3.parquet",
     )
     parser.add_argument(
         "--dataset_config_name",

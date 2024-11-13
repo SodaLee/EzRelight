@@ -56,6 +56,7 @@ from diffusers.utils import (
 from diffusers.utils.torch_utils import is_compiled_module, randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, StableDiffusionMixin
 from diffusers.pipelines.stable_diffusion_xl.pipeline_output import StableDiffusionXLPipelineOutput
+from huggingface_hub.utils import validate_hf_hub_args
 
 
 if is_invisible_watermark_available():
@@ -1348,7 +1349,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         prompt_2: Optional[Union[str, List[str]]] = None,
         image: PipelineImageInput = None,
         control_image: PipelineImageInput = None,
-        controlnet_image: Optional[PipelineImageInput] = None,
+        controlnext_image: Optional[PipelineImageInput] = None,
         controlnet_scale: Optional[float] = 1.0,
         height: Optional[int] = None,
         width: Optional[int] = None,
@@ -1778,9 +1779,9 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         add_text_embeds = add_text_embeds.to(device)
         add_time_ids = add_time_ids.to(device)
 
-        if controlnet_image is not None and self.controlnext is not None:
-            controlnet_image = self.prepare_control_image(
-                controlnet_image,
+        if controlnext_image is not None and self.controlnext is not None:
+            controlnext_image = self.prepare_control_image(
+                controlnext_image,
                 width,
                 height,
                 batch_size,
@@ -1847,7 +1848,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                 unet_additional_args = {}
                 if self.controlnext is not None:
                     controls = self.controlnext(
-                        controlnet_image,
+                        controlnext_image,
                         t,
                     )
 
