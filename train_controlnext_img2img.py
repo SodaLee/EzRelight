@@ -1080,6 +1080,7 @@ def main(args):
                             accelerator.unwrap_model(controlnext),
                             save_path,
                             args,
+                            orig_unet_sd if args.save_weights_increaments else None,
                         )
                         logger.info(f"Saved state to {save_path}")
 
