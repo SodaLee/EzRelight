@@ -106,6 +106,16 @@ def parse_args(input_args=None):
         )
     )
     parser.add_argument(
+        "--controlnext_scale_factor",
+        type=float,
+        default=1.0,
+        help=(
+            "The scale factor for the controlnext. This is used to scale the controlnet output before adding it to the unet output."
+            " For depth control, we recommend setting this to 1.0."
+            " For canny control, we recommend setting this to 0.35."
+        )
+    )
+    parser.add_argument(
         "--save_weights_increaments",
         action="store_true",
         default=False,

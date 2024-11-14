@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES="2,3" \
+CUDA_VISIBLE_DEVICES="6,7" \
 accelerate launch train_controlnext_img2img.py \
 --pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
@@ -11,6 +11,7 @@ accelerate launch train_controlnext_img2img.py \
 --set_grads_to_none \
 --proportion_empty_prompts 0.2 \
 --controlnet_scale_factor 1.0 \
+--train_batch_size 2 \
 --save_weights_increaments \
 --mixed_precision fp16 \
 --enable_xformers_memory_efficient_attention \

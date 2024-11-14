@@ -143,7 +143,7 @@ def log_validation(vae, unet, controlnet, controlnext, args, accelerator, weight
                     prompt=validation_prompt,
                     control_image=bg_image,
                     controlnext_image=validation_image,
-                    controlnet_scale_factor=args.controlnet_scale_factor,
+                    controlnet_scale=args.controlnext_scale_factor,
                     num_inference_steps=20,
                     generator=generator,
                     width=args.resolution,
@@ -992,20 +992,20 @@ def main(args):
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                control_image = batch["lighting"].to(accelerator.device, dtype=controlnet.dtype)
+                control_image = batch["lighting"].to(accelerator.device, dtype=torch.float32)
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
                     timesteps,
                     encoder_hidden_states=batch["prompt_ids"],
                     controlnet_cond=control_image,
-                    conditioning_scale=[1.0],
+                    conditioning_scale=1.0,
                     added_cond_kwargs=batch["unet_added_conditions"],
                     return_dict=False,
                 )
 
                 # ControlNext conditioning.
-                controlnext_image = batch["depth"].to(accelerator.device, dtype=controlnext.dtype)
-                ref_image = (batch["source"]*batch["mask"]).to(accelerator.device, dtype=controlnext.dtype)
+                controlnext_image = batch["depth"].to(accelerator.device, dtype=torch.float32)
+                ref_image = (batch["source"]*batch["mask"]).to(accelerator.device, dtype=torch.float32)
                 controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
                 controls = controlnext(
                     controlnext_image,
