@@ -435,13 +435,27 @@ def prepare_train_dataset(dataset, accelerator):
         ]
     )
 
+    def ACESToneMapping(color, adapted_lum):
+        A = 2.51
+        B = 0.03
+        C = 2.43
+        D = 0.59
+        E = 0.14
+
+        color *= adapted_lum
+        return (color * (A * color + B)) / (color * (C * color + D) + E)
+
     def preprocess_train(examples):
         source = [cv2.imread(source, cv2.IMREAD_UNCHANGED) for source in examples['source']]
         source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
+        if args.enable_acestonemapping:
+            source = [ACESToneMapping(s, 1.0) for s in source]
         source = [conditioning_image_transforms(s) for s in source]
 
         target = [cv2.imread(target, cv2.IMREAD_UNCHANGED) for target in examples['target']]
         target = [cv2.cvtColor(t, cv2.COLOR_BGR2RGB) for t in target]
+        if args.enable_acestonemapping:
+            target = [ACESToneMapping(t, 1.0) for t in target]
         target = [image_transforms(t) for t in target]
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]

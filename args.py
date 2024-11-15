@@ -116,6 +116,12 @@ def parse_args(input_args=None):
         )
     )
     parser.add_argument(
+        "--enable_acestonemapping",
+        action="store_true",
+        default=False,
+        help="Enable the ACES tone mapping for the image.",
+    )
+    parser.add_argument(
         "--save_weights_increaments",
         action="store_true",
         default=False,
