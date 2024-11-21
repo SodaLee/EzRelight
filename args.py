@@ -1,4 +1,5 @@
 import argparse
+import os
 
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Simple example of a ControlNet training script.")
@@ -14,6 +15,12 @@ def parse_args(input_args=None):
         type=str,
         default=None,
         help="Path to an improved VAE to stabilize training. For more details check out: https://github.com/huggingface/diffusers/pull/4038.",
+    )
+    parser.add_argument(
+        "--stage1_chp_path",
+        type=str,
+        default=None,
+        help="Path to stage1 training path for stage2 training.",
     )
     parser.add_argument(
         "--pretrained_unet_model_name_or_path",
@@ -489,5 +496,10 @@ def parse_args(input_args=None):
         raise ValueError(
             "`--resolution` must be divisible by 8 for consistently sized encoded images between the VAE and the controlnet encoder."
         )
+
+    if args.stage1_chp_path is not None:
+        args.pretrained_unet_model_name_or_path = os.path.join(args.stage1_chp_path, "unet_weight_increasements.safetensors")
+        args.controlnet_model_name_or_path = os.path.join(args.stage1_chp_path, "controlnet.safetensors")
+        args.controlnext_model_name_or_path = os.path.join(args.stage1_chp_path, "controlnext.safetensors")
 
     return args
