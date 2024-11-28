@@ -13,10 +13,11 @@ accelerate launch train_stage2.py \
 --controlnet_scale_factor 1.0 \
 --train_batch_size 2 \
 --save_weights_increaments \
+--load_weights_increaments \
 --mixed_precision fp16 \
 --enable_xformers_memory_efficient_attention \
 --dataset_name "/data/lihaochen/projects/EzRelight" \
---data_files "stage1.parquet" \
+--data_files "stage2_train.parquet" \
 --cache_dir "/data3/lihaochen/BGRelight/stage1_cache" \
 --caption_column "caption" \
---stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage1/try_1115/final"
+--stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage1/try_1115/checkpoints/final"

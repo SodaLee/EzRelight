@@ -13,6 +13,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 import argparse
 import functools
 import gc
@@ -41,6 +44,7 @@ from packaging import version
 from PIL import Image
 from torchvision import transforms
 from torchvision.transforms import v2
+from torchvision.transforms.v2.functional import crop
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
 
@@ -410,20 +414,36 @@ def encode_prompt(prompt_batch, text_encoders, tokenizers, proportion_empty_prom
 
 
 def prepare_train_dataset(dataset, accelerator):
+    # 自定义裁剪函数
+    class TopCenterCrop:
+        def __init__(self, resolution):
+            self.resolution = resolution
+
+        def __call__(self, img):
+            _, height, width = img.shape  # 获取图像宽高
+            if height > width:  # 竖图
+                top = max(0, height // 4 - self.resolution // 2)  # 向上偏移裁剪
+                left = max(0, (width - self.resolution) // 2)  # 水平居中裁剪
+            else:  # 横图，保持中心裁剪
+                top = max(0, (height - self.resolution) // 2)
+                left = max(0, (width - self.resolution) // 2)
+
+            return crop(img, top, left, self.resolution, self.resolution)
+    
     image_transforms = v2.Compose(
         [
-            v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
-            v2.CenterCrop(args.resolution),
             v2.ToTensor(),
+            v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
+            TopCenterCrop(args.resolution),
             v2.Normalize([0.5], [0.5]),
         ]
     )
     
     conditioning_image_transforms = v2.Compose(
         [
-            v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
-            v2.CenterCrop(args.resolution),
             v2.ToTensor(),
+            v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
+            TopCenterCrop(args.resolution),
         ]
     )
 
@@ -435,27 +455,13 @@ def prepare_train_dataset(dataset, accelerator):
         ]
     )
 
-    def ACESToneMapping(color, adapted_lum):
-        A = 2.51
-        B = 0.03
-        C = 2.43
-        D = 0.59
-        E = 0.14
-
-        color *= adapted_lum
-        return (color * (A * color + B)) / (color * (C * color + D) + E)
-
     def preprocess_train(examples):
         source = [cv2.imread(source, cv2.IMREAD_UNCHANGED) for source in examples['source']]
         source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
-        if args.enable_acestonemapping:
-            source = [ACESToneMapping(s, 1.0) for s in source]
-        source = [conditioning_image_transforms(s) for s in source]
+        source = [conditioning_image_transforms(s) for s in source] # used for conditioning (important)
 
         target = [cv2.imread(target, cv2.IMREAD_UNCHANGED) for target in examples['target']]
         target = [cv2.cvtColor(t, cv2.COLOR_BGR2RGB) for t in target]
-        if args.enable_acestonemapping:
-            target = [ACESToneMapping(t, 1.0) for t in target]
         target = [image_transforms(t) for t in target]
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
@@ -643,8 +649,11 @@ def main(args):
         unet_sd = load_file(args.pretrained_unet_model_name_or_path)
         if args.load_weights_increaments:
             logger.info("Loading unet weights in increaments")
-            for k in unet_sd.keys():
-                unet_sd[k] += orig_unet_sd[k]
+            for k in orig_unet_sd.keys():
+                if k in unet_sd:
+                    unet_sd[k] += orig_unet_sd[k]
+                else:
+                    unet_sd[k] = orig_unet_sd[k]
         unet.load_state_dict(unet_sd)
     else:
         logger.info("Initializing unet weights from scratch")
