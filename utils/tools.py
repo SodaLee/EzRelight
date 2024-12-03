@@ -5,7 +5,7 @@ from diffusers import UniPCMultistepScheduler, AutoencoderKL, ControlNetModel
 from safetensors.torch import load_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
 from models.unet import UNet2DConditionModel
-from models.controlnet import ControlNetModel
+from models.controlnet import ControlNetModel as ControlNext
 from . import utils
 
 UNET_CONFIG = {
@@ -90,6 +90,7 @@ def get_pipeline(
     pretrained_model_name_or_path,
     unet_model_name_or_path,
     controlnet_model_name_or_path,
+    controlnext_model_name_or_path,
     vae_model_name_or_path=None,
     lora_path=None,
     load_weight_increasement=False,
@@ -128,7 +129,10 @@ def get_pipeline(
         pipeline_init_kwargs["vae"] = vae
 
     if controlnet_model_name_or_path is not None:
-        pipeline_init_kwargs["controlnet"] = ControlNetModel.from_config(CONTROLNET_CONFIG).to(device, dtype=torch.float32)  # init
+        pipeline_init_kwargs["controlnet"] = ControlNetModel.from_unet(unet)
+
+    if controlnext_model_name_or_path is not None:
+        pipeline_init_kwargs["controlnext"] = ControlNext.from_config(CONTROLNET_CONFIG).to(device, dtype=torch.float32)  # init
 
     print(f"loading pipeline from {pretrained_model_name_or_path}")
     if os.path.isfile(pretrained_model_name_or_path):
@@ -163,6 +167,14 @@ def get_pipeline(
         print(f"loading controlnext controlnet from {controlnet_model_name_or_path}")
         pipeline.load_controlnext_controlnet_weights(
             controlnet_model_name_or_path,
+            use_safetensors=True,
+            torch_dtype=torch.float32,
+            cache_dir=hf_cache_dir,
+        )
+    if controlnext_model_name_or_path is not None:
+        print(f"loading controlnext controlnext from {controlnext_model_name_or_path}")
+        pipeline.load_controlnext_controlnext_weights(
+            controlnext_model_name_or_path,
             use_safetensors=True,
             torch_dtype=torch.float32,
             cache_dir=hf_cache_dir,

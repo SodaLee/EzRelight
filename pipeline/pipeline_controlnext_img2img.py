@@ -37,8 +37,8 @@ from diffusers.loaders import (
     StableDiffusionXLLoraLoaderMixin,
     TextualInversionLoaderMixin,
 )
-from models.controlnet import ControlNetModel
-from diffusers.models import AutoencoderKL, ImageProjection, UNet2DConditionModel
+from models.controlnet import ControlNetModel as ControlNext
+from diffusers.models import AutoencoderKL, ImageProjection, UNet2DConditionModel, ControlNetModel
 from diffusers.models.attention_processor import (
     AttnProcessor2_0,
     XFormersAttnProcessor,
@@ -431,9 +431,12 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         logger.info(f"Loading ControlNeXt UNet" + (f" with weight increasement." if load_weight_increasement else "."))
         if load_weight_increasement:
             unet_sd = self.unet.state_dict()
-            for k in state_dict.keys():
-                state_dict[k] = state_dict[k] + unet_sd[k]
-        self.unet.load_state_dict(state_dict, strict=False)
+            for k in unet_sd.keys():
+                if k in state_dict:
+                    state_dict[k] += unet_sd[k]
+                else:
+                    state_dict[k] = unet_sd[k]
+        self.unet.load_state_dict(state_dict)
 
     @classmethod
     @validate_hf_hub_args
@@ -464,6 +467,32 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
     @classmethod
     @validate_hf_hub_args
     def controlnext_controlnet_state_dict(
+        cls,
+        pretrained_model_name_or_path_or_dict: Union[str, Dict[str, torch.Tensor]],
+        **kwargs,
+    ):
+        if 'weight_name' not in kwargs:
+            kwargs['weight_name'] = CONTROLNEXT_WEIGHT_NAME_SAFE if kwargs.get('use_safetensors', False) else CONTROLNEXT_WEIGHT_NAME
+        return cls.controlnext_state_dict(pretrained_model_name_or_path_or_dict, **kwargs)
+    
+    def load_controlnext_controlnext_weights(
+        self,
+        pretrained_model_name_or_path_or_dict: Union[str, Dict[str, torch.Tensor]],
+        **kwargs,
+    ):
+        if self.controlnext is None:
+            raise ValueError("No ControlNeXt ControlNeXt found in the pipeline.")
+        if isinstance(pretrained_model_name_or_path_or_dict, dict):
+            pretrained_model_name_or_path_or_dict = pretrained_model_name_or_path_or_dict.copy()
+
+        state_dict = self.controlnext_controlnext_state_dict(pretrained_model_name_or_path_or_dict, **kwargs)
+
+        logger.info(f"Loading ControlNeXt ControlNeXt")
+        self.controlnext.load_state_dict(state_dict, strict=True)
+
+    @classmethod
+    @validate_hf_hub_args
+    def controlnext_controlnext_state_dict(
         cls,
         pretrained_model_name_or_path_or_dict: Union[str, Dict[str, torch.Tensor]],
         **kwargs,

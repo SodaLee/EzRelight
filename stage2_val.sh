@@ -1,5 +1,5 @@
-CUDA_VISIBLE_DEVICES="6,7" \
-accelerate launch train_stage2.py \
+CUDA_VISIBLE_DEVICES="6" \
+accelerate launch val_stage2.py \
 --pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
 --variant fp16 \
@@ -11,14 +11,14 @@ accelerate launch train_stage2.py \
 --set_grads_to_none \
 --proportion_empty_prompts 0.2 \
 --controlnet_scale_factor 1.0 \
---train_batch_size 2 \
+--train_batch_size 1 \
 --save_weights_increaments \
 --load_weights_increaments \
 --mixed_precision fp16 \
 --checkpointing_steps 2000 \
 --enable_xformers_memory_efficient_attention \
 --dataset_name "/data/lihaochen/projects/EzRelight" \
---data_files "stage2_train.parquet" \
+--data_files "stage2_test.parquet" \
 --cache_dir "/data3/lihaochen/BGRelight/stage1_cache" \
 --caption_column "caption" \
---stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage1/try_1115/checkpoints/final"
+--stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage2/try_1119_from_1115/checkpoints/final"
