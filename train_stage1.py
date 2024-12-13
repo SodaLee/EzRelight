@@ -459,7 +459,7 @@ def prepare_train_dataset(dataset, accelerator):
         target = [image_transforms(t) for t in target]
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
-        mask = [1 - np.all(m == [191,191,191], axis=-1).astype(np.uint8) for m in mask]
+        mask = [1 - np.all(m == [191,191,191], axis=-1).astype(np.float32) for m in mask]
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
 

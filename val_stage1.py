@@ -78,6 +78,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         validation_image = batch["source"].to(dtype=weight_dtype)
         validation_prompt = batch["caption"][0]
         gt = batch["target"].to(dtype=weight_dtype)
+        inputs = batch["source"]*batch["mask"].to(dtype=weight_dtype)
 
         images = []
         control_image = batch["lighting"].to(device, dtype=torch.float32)
@@ -88,7 +89,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         with inference_ctx:
             image = pipeline(
                 prompt=validation_prompt,
-                image=validation_image,
+                image=inputs,
                 control_image=control_image,
                 controlnext_image=controlnext_image,
                 controlnet_scale=args.controlnext_scale_factor,
@@ -115,7 +116,8 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         formatted_images = []
         formatted_images.append(np.asarray(validation_image.permute(1, 2, 0).cpu()))
         for image in images:
-            formatted_images.append(np.asarray(image / 2.0 + 0.5))
+            # formatted_images.append(np.asarray(image.permute(1, 2, 0).cpu()) / 2 + 0.5)
+            formatted_images.append(np.asarray(image))
         formatted_images.append(np.asarray(gt.permute(1, 2, 0).cpu()))
         formatted_images = np.concatenate(formatted_images, 1)
 
@@ -187,36 +189,20 @@ def get_train_dataset(args):
 
 
 def prepare_train_dataset(dataset):
-    # 自定义裁剪函数
-    class TopCenterCrop:
-        def __init__(self, resolution):
-            self.resolution = resolution
-
-        def __call__(self, img):
-            _, height, width = img.shape  # 获取图像宽高
-            if height > width:  # 竖图
-                top = max(0, height // 4 - self.resolution // 2)  # 向上偏移裁剪
-                left = max(0, (width - self.resolution) // 2)  # 水平居中裁剪
-            else:  # 横图，保持中心裁剪
-                top = max(0, (height - self.resolution) // 2)
-                left = max(0, (width - self.resolution) // 2)
-
-            return crop(img, top, left, self.resolution, self.resolution)
-    
     image_transforms = v2.Compose(
         [
-            v2.ToTensor(),
             v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
-            TopCenterCrop(args.resolution),
+            v2.CenterCrop(args.resolution),
+            v2.ToTensor(),
             v2.Normalize([0.5], [0.5]),
         ]
     )
     
     conditioning_image_transforms = v2.Compose(
         [
-            v2.ToTensor(),
             v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
-            TopCenterCrop(args.resolution),
+            v2.CenterCrop(args.resolution),
+            v2.ToTensor(),
         ]
     )
 
@@ -228,29 +214,41 @@ def prepare_train_dataset(dataset):
         ]
     )
 
+    def ACESToneMapping(color, adapted_lum):
+        A = 2.51
+        B = 0.03
+        C = 2.43
+        D = 0.59
+        E = 0.14
+
+        color *= adapted_lum
+        return (color * (A * color + B)) / (color * (C * color + D) + E)
+
     def preprocess_train(examples):
         source = [cv2.imread(source, cv2.IMREAD_UNCHANGED) for source in examples['source']]
         source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
-        source = [conditioning_image_transforms(s) for s in source] # used for conditioning (important)
+        if args.enable_acestonemapping:
+            source = [ACESToneMapping(s, 1.0) for s in source]
+        source = [conditioning_image_transforms(s) for s in source]
 
         target = [cv2.imread(target, cv2.IMREAD_UNCHANGED) for target in examples['target']]
         target = [cv2.cvtColor(t, cv2.COLOR_BGR2RGB) for t in target]
-        target = [conditioning_image_transforms(t) for t in target] # IMPORTANT: in testing, normalization is not needed
+        if args.enable_acestonemapping:
+            target = [ACESToneMapping(t, 1.0) for t in target]
+        target = [conditioning_image_transforms(t) for t in target]
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
-        mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
-        img_depth = [np.load(depth) for depth in examples['img_depth']]
-        bg_depth = [np.load(depth) for depth in examples['bg_depth']]
-        depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
-        
+        mask = [1.0 - np.all(m == [191,191,191], axis=-1).astype(np.float32) for m in mask]
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
 
+        depth = [np.load(depth) for depth in examples['depth']]
         depth = [np.expand_dims(d, axis=-1) for d in depth]
         depth = [conditioning_image_transforms(d) for d in depth]
 
         lighting = [cv2.imread(lighting, cv2.IMREAD_UNCHANGED) for lighting in examples['lighting']]
         lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
+        lighting = [np.roll(l, -int(l.shape[1] * phi / 2), 1) for l, phi in zip(lighting, examples['phi'])]
         lighting = [bg_image_transforms(l) for l in lighting]
 
         # phi = [torch.tensor(phi) for phi in examples['phi']]
@@ -302,7 +300,7 @@ def main(args):
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
 
-    weight_dtype = torch.float16
+    weight_dtype = torch.float32
 
     train_dataset = get_train_dataset(args)
 
