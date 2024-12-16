@@ -81,144 +81,6 @@ if is_torch_npu_available():
     torch.npu.config.allow_internal_format = False
 
 
-def log_validation(vae, unet, controlnet, controlnext, args, accelerator, weight_dtype, step, is_final_validation=False):
-    logger.info("Running validation... ")
-
-    pipeline = StableDiffusionXLControlNeXtImg2ImgPipeline.from_pretrained(
-        args.pretrained_model_name_or_path,
-        vae=vae,
-        unet=unet,
-        controlnet=controlnet,
-        controlnext=controlnext,
-        safety_checker=None,
-        revision=args.revision,
-        variant=args.variant,
-        torch_dtype=weight_dtype,
-    )
-
-    pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
-    pipeline = pipeline.to(accelerator.device)
-    pipeline.set_progress_bar_config(disable=True)
-
-    if args.enable_xformers_memory_efficient_attention:
-        pipeline.enable_xformers_memory_efficient_attention()
-
-    if args.seed is None:
-        generator = None
-    else:
-        generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
-
-    if len(args.validation_image) == len(args.validation_prompt):
-        validation_images = args.validation_image
-        validation_prompts = args.validation_prompt
-        bg_images = args.validation_bg_image
-    elif len(args.validation_image) == 1:
-        validation_images = args.validation_image * len(args.validation_prompt)
-        validation_prompts = args.validation_prompt
-    elif len(args.validation_prompt) == 1:
-        validation_images = args.validation_image
-        validation_prompts = args.validation_prompt * len(args.validation_image)
-    else:
-        raise ValueError(
-            "number of `args.validation_image` and `args.validation_prompt` should be checked in `parse_args`"
-        )
-
-    image_logs = []
-    if is_final_validation or torch.backends.mps.is_available():
-        autocast_ctx = nullcontext()
-    else:
-        autocast_ctx = torch.autocast(accelerator.device.type)
-
-    for validation_prompt, validation_image, bg_image in zip(validation_prompts, validation_images, bg_images):
-        validation_image = Image.open(validation_image).convert("RGB")
-        validation_image = validation_image.resize((args.resolution, args.resolution))
-
-        bg_image = Image.open(bg_image).convert("RGB")
-        #bg_image = bg_image.resize((args.bg_resolution_x, args.bg_resolution_y))
-        bg_image = bg_image.resize((args.resolution, args.resolution))
-
-        images = []
-
-        # bg_image -> lighting
-        # validation_image -> [depth, source*mask]
-        for _ in range(args.num_validation_images):
-            with autocast_ctx:
-                image = pipeline(
-                    prompt=validation_prompt,
-                    control_image=bg_image,
-                    controlnext_image=validation_image,
-                    controlnet_scale=args.controlnext_scale_factor,
-                    num_inference_steps=20,
-                    generator=generator,
-                    width=args.resolution,
-                    height=args.resolution,
-                ).images[0]
-            images.append(image)
-
-        image_logs.append(
-            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt, "bg_image": bg_image}
-        )
-
-    sample_dir = os.path.join(args.output_dir, "samples", f"sample-{step}")
-    os.makedirs(sample_dir, exist_ok=True)
-    tracker_key = "test" if is_final_validation else "validation"
-    for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                validation_image = log["validation_image"]
-                bg_image = log["bg_image"]
-
-                formatted_images = []
-
-                formatted_images.append(np.asarray(validation_image))
-
-                for image in images:
-                    formatted_images.append(np.asarray(image))
-
-                formatted_images.append(np.asarray(bg_image))
-
-                formatted_images = np.stack(formatted_images)
-
-                tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
-        elif tracker.name == "wandb":
-            formatted_images = []
-
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                validation_image = log["validation_image"]
-                bg_image = log["bg_image"]
-
-                formatted_images.append(wandb.Image(validation_image, caption="Controlnet conditioning"))
-
-                for image in images:
-                    image = wandb.Image(image, caption=validation_prompt)
-                    formatted_images.append(image)
-                
-                formatted_images.append(wandb.Image(bg_image, caption="Background image"))
-
-            tracker.log({tracker_key: formatted_images})
-        else:
-            logger.warning(f"image logging not implemented for {tracker.name}")
-
-    formatted_images = []
-    formatted_images.append(validation_image)
-    for i, image in enumerate(images):
-        formatted_images.append(image)
-        image.save(os.path.join(sample_dir, f"image-{i}_{step}.png"))
-    image_grid = make_image_grid(formatted_images, 1, len(formatted_images))
-    image_grid.save(os.path.join(sample_dir, f"grid_{step}.png"))
-    logger.info(f"{len(formatted_images)} validation images saved to {sample_dir}")
-
-    del pipeline
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    return image_logs
-
-
 def save_models(unet, controlnet, controlnext, output_dir, args, orig_unet_sd=None):
     os.makedirs(output_dir, exist_ok=True)
     unet_sd = unet.state_dict()
@@ -250,51 +112,6 @@ def import_model_class_from_model_name_or_path(
         return CLIPTextModelWithProjection
     else:
         raise ValueError(f"{model_class} is not supported.")
-
-
-def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=None):
-    img_str = ""
-    if image_logs is not None:
-        img_str = "You can find some example images below.\n\n"
-        for i, log in enumerate(image_logs):
-            images = log["images"]
-            validation_prompt = log["validation_prompt"]
-            validation_image = log["validation_image"]
-            validation_image.save(os.path.join(repo_folder, "image_control.png"))
-            bg_image = log["bg_image"]
-            bg_image.save(os.path.join(repo_folder, "bg_image.png"))
-            img_str += f"prompt: {validation_prompt}\n"
-            images = [validation_image] + images
-            make_image_grid(images, 1, len(images)).save(os.path.join(repo_folder, f"images_{i}.png"))
-            img_str += f"![images_{i})](./images_{i}.png)\n"
-
-    model_description = f"""
-# controlnet-{repo_id}
-
-These are controlnet weights trained on {base_model} with new type of conditioning.
-{img_str}
-"""
-
-    model_card = load_or_create_model_card(
-        repo_id_or_path=repo_id,
-        from_training=True,
-        license="openrail++",
-        base_model=base_model,
-        model_description=model_description,
-        inference=True,
-    )
-
-    tags = [
-        "stable-diffusion-xl",
-        "stable-diffusion-xl-diffusers",
-        "text-to-image",
-        "diffusers",
-        "controlnet",
-        "diffusers-training",
-    ]
-    model_card = populate_model_card(model_card, tags=tags)
-
-    model_card.save(os.path.join(repo_folder, "README.md"))
 
 
 class LossRecorder:
@@ -1109,18 +926,6 @@ def main(args):
                         )
                         logger.info(f"Saved state to {save_path}")
 
-                    if args.validation_prompt is not None and global_step % args.validation_steps == 0:
-                        image_logs = log_validation(
-                            vae=vae,
-                            unet=accelerator.unwrap_model(unet),
-                            controlnet=accelerator.unwrap_model(controlnet),
-                            controlnext=accelerator.unwrap_model(controlnext),
-                            args=args,
-                            accelerator=accelerator,
-                            weight_dtype=weight_dtype,
-                            step=global_step,
-                        )
-
             loss = loss.detach().item()
             loss_recorder.add(loss=loss)
             loss_avr: float = loss_recorder.moving_average(window=1000)
@@ -1144,36 +949,6 @@ def main(args):
             args,
             orig_unet_sd if args.save_weights_increaments else None,
         )
-
-        # Run a final round of validation.
-        # Setting `vae`, `unet`, and `controlnet` to None to load automatically from `args.output_dir`.
-        image_logs = None
-        if args.validation_prompt is not None:
-            image_logs = log_validation(
-                vae=vae,
-                unet=accelerator.unwrap_model(unet),
-                controlnet=accelerator.unwrap_model(controlnet),
-                controlnext=accelerator.unwrap_model(controlnext),
-                args=args,
-                accelerator=accelerator,
-                weight_dtype=weight_dtype,
-                step=global_step,
-                is_final_validation=True,
-            )
-
-        if args.push_to_hub:
-            save_model_card(
-                repo_id,
-                image_logs=image_logs,
-                base_model=args.pretrained_model_name_or_path,
-                repo_folder=args.output_dir,
-            )
-            upload_folder(
-                repo_id=repo_id,
-                folder_path=args.output_dir,
-                commit_message="End of training",
-                ignore_patterns=["step_*", "epoch_*"],
-            )
 
     accelerator.end_training()
 

@@ -83,7 +83,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         images = []
         control_image = batch["lighting"].to(device, dtype=torch.float32)
         controlnext_image = batch["depth"].to(device, dtype=torch.float32)
-        ref_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
+        ref_image = (((batch["source"] - 0.5) * 2) *batch["mask"]).to(device, dtype=torch.float32)
         controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
 
         with inference_ctx:
@@ -191,18 +191,18 @@ def get_train_dataset(args):
 def prepare_train_dataset(dataset):
     image_transforms = v2.Compose(
         [
+            v2.ToTensor(),
             v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
             v2.CenterCrop(args.resolution),
-            v2.ToTensor(),
             v2.Normalize([0.5], [0.5]),
         ]
     )
     
     conditioning_image_transforms = v2.Compose(
         [
+            v2.ToTensor(),
             v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
             v2.CenterCrop(args.resolution),
-            v2.ToTensor(),
         ]
     )
 
