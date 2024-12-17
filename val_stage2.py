@@ -78,17 +78,18 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         validation_image = batch["source"].to(dtype=weight_dtype)
         validation_prompt = batch["caption"][0]
         gt = batch["target"].to(dtype=weight_dtype)
+        inputs = batch["source"]*batch["mask"].to(dtype=weight_dtype)
 
         images = []
         control_image = batch["lighting"].to(device, dtype=torch.float32)
         controlnext_image = batch["depth"].to(device, dtype=torch.float32)
-        ref_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
+        ref_image = (((batch["source"] - 0.5) * 2) *batch["mask"]).to(device, dtype=torch.float32)
         controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
 
         with inference_ctx:
             image = pipeline(
                 prompt=validation_prompt,
-                image=validation_image,
+                image=inputs,
                 control_image=control_image,
                 controlnext_image=controlnext_image,
                 controlnet_scale=args.controlnext_scale_factor,
@@ -115,7 +116,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         formatted_images = []
         formatted_images.append(np.asarray(validation_image.permute(1, 2, 0).cpu()))
         for image in images:
-            formatted_images.append(np.asarray(image / 2.0 + 0.5))
+            formatted_images.append(np.asarray(image))
         formatted_images.append(np.asarray(gt.permute(1, 2, 0).cpu()))
         formatted_images = np.concatenate(formatted_images, 1)
 
@@ -302,7 +303,7 @@ def main(args):
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
 
-    weight_dtype = torch.float16
+    weight_dtype = torch.float32
 
     train_dataset = get_train_dataset(args)
 

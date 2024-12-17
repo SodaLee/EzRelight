@@ -15,6 +15,7 @@ accelerate launch train_stage1.py \
 --train_batch_size 2 \
 --save_weights_increaments \
 --mixed_precision fp16 \
+--checkpointing_steps 1000 \
 --enable_xformers_memory_efficient_attention \
 --enable_acestonemapping \
 --dataset_name "/data/lihaochen/projects/EzRelight" \
