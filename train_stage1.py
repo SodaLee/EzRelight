@@ -468,7 +468,7 @@ def main(args):
         logger.info("Initializing unet weights from scratch")
         pass
 
-    controlnet = ControlNetModel.from_unet(unet)
+    controlnet = ControlNetModel.from_unet(unet, conditioning_channels=6)
     if args.controlnet_model_name_or_path:
         logger.info("Loading existing controlnet weights")
         controlnet.load_state_dict(load_file(args.controlnet_model_name_or_path))
@@ -617,10 +617,10 @@ def main(args):
 
     # Move vae, unet and text_encoder to device and cast to weight_dtype
     # The VAE is in float32 to avoid NaN losses.
-    if args.pretrained_vae_model_name_or_path is not None:
-        vae.to(accelerator.device, dtype=weight_dtype)
-    else:
-        vae.to(accelerator.device, dtype=torch.float32)
+    # if args.pretrained_vae_model_name_or_path is not None:
+    #     vae.to(accelerator.device, dtype=weight_dtype)
+    # else:
+    vae.to(accelerator.device, dtype=torch.float32)
     unet.to(accelerator.device, dtype=weight_dtype)
     controlnet = controlnet.to(accelerator.device, dtype=torch.float32)
     controlnext = controlnext.to(accelerator.device, dtype=torch.float32)
@@ -805,10 +805,10 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnet, controlnext):
                 # Convert images to latent space
-                if args.pretrained_vae_model_name_or_path is not None:
-                    pixel_values = (batch["target"]*batch["mask"]).to(dtype=weight_dtype)
-                else:
-                    pixel_values = (batch["target"]*batch["mask"])
+                # if args.pretrained_vae_model_name_or_path is not None:
+                #     pixel_values = (batch["target"]*batch["mask"]).to(dtype=weight_dtype)
+                # else:
+                pixel_values = (batch["target"]*batch["mask"])
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
@@ -826,10 +826,9 @@ def main(args):
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                control_image = batch["lighting"].to(accelerator.device, dtype=weight_dtype)
-                control_image = vae.encode(control_image).latent_dist.sample()
-                control_image = control_image * vae.config.scaling_factor
-                control_image = control_image.to(accelerator.device, dtype=torch.float32)
+                control_image = (batch["source"]*batch["mask"]).to(accelerator.device, dtype=torch.float32)
+                lighting = batch["lighting"].to(accelerator.device, dtype=torch.float32)
+                control_image = torch.cat([control_image, lighting], dim=1)
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
                     timesteps,

@@ -78,7 +78,9 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         inputs = batch["source"]*batch["mask"].to(dtype=weight_dtype)
 
         images = []
-        control_image = batch["lighting"].to(device, dtype=torch.float32)
+        control_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
+        lighting = batch["lighting"].to(device, dtype=torch.float32)
+        control_image = torch.cat([control_image, lighting], dim=1)
         controlnext_image = batch["depth"].to(device, dtype=torch.float32)
         ref_image = (((batch["source"] - 0.5) * 2) *batch["mask"]).to(device, dtype=torch.float32)
         controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)

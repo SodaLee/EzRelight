@@ -1715,7 +1715,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                 dtype=controlnet.dtype,
                 do_classifier_free_guidance=self.do_classifier_free_guidance,
                 guess_mode=guess_mode,
-                refer_vae=True,
+                refer_vae=False,
                 generator=generator,
             )
             height, width = control_image.shape[-2:]
@@ -1733,7 +1733,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                     dtype=controlnet.dtype,
                     do_classifier_free_guidance=self.do_classifier_free_guidance,
                     guess_mode=guess_mode,
-                    refer_vae=True,
+                    refer_vae=False,
                     generator=generator,
                 )
 

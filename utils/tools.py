@@ -130,7 +130,7 @@ def get_pipeline(
         pipeline_init_kwargs["vae"] = vae
 
     if controlnet_model_name_or_path is not None:
-        pipeline_init_kwargs["controlnet"] = ControlNetModel.from_unet(unet)
+        pipeline_init_kwargs["controlnet"] = ControlNetModel.from_unet(unet, conditioning_channels=6)
 
     if controlnext_model_name_or_path is not None:
         pipeline_init_kwargs["controlnext"] = ControlNext.from_config(CONTROLNET_CONFIG).to(device, dtype=torch.float32)  # init
