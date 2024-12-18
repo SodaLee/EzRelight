@@ -56,7 +56,7 @@ from diffusers.utils.torch_utils import is_compiled_module
 
 from safetensors.torch import load_file, save_file
 from pipeline.pipeline_controlnext import StableDiffusionXLControlNeXtPipeline
-from models.controlnet import ControlNetModel
+from models.controlnext import ControlNetModel
 from models.unet import UNet2DConditionModel
 
 if is_wandb_available():

@@ -11,15 +11,12 @@ from PIL import Image
 from utils import preprocess, tools
 
 from safetensors.torch import load_file, save_file
-from models.controlnet import ControlNetModel as ControlNext
-from models.unet import UNet2DConditionModel
 from args import parse_args
 from datasets import load_dataset
 from diffusers import (
     AutoencoderKL,
     DDPMScheduler,
     UniPCMultistepScheduler,
-    ControlNetModel,
 )
 from diffusers.utils.import_utils import is_torch_npu_available, is_xformers_available
 from transformers import AutoTokenizer, PretrainedConfig

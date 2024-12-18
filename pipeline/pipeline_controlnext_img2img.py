@@ -37,7 +37,7 @@ from diffusers.loaders import (
     StableDiffusionXLLoraLoaderMixin,
     TextualInversionLoaderMixin,
 )
-from models.controlnet import ControlNetModel as ControlNext
+from models.controlnext import ControlNetModel as ControlNext
 from diffusers.models import AutoencoderKL, ImageProjection, UNet2DConditionModel, ControlNetModel
 from diffusers.models.attention_processor import (
     AttnProcessor2_0,

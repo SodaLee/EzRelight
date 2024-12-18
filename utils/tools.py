@@ -1,11 +1,12 @@
 import os
 import gc
 import torch
-from diffusers import UniPCMultistepScheduler, AutoencoderKL, ControlNetModel
+from diffusers import UniPCMultistepScheduler, AutoencoderKL
 from safetensors.torch import load_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
 from models.unet import UNet2DConditionModel
-from models.controlnet import ControlNetModel as ControlNext
+from models.controlnext import ControlNetModel as ControlNext
+from models.controlnet import ControlNetModel
 from . import utils
 
 UNET_CONFIG = {

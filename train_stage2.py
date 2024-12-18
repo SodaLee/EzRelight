@@ -53,7 +53,6 @@ from diffusers import (
     AutoencoderKL,
     DDPMScheduler,
     UniPCMultistepScheduler,
-    ControlNetModel,
 )
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available, make_image_grid
@@ -63,8 +62,9 @@ from diffusers.utils.torch_utils import is_compiled_module
 
 from safetensors.torch import load_file, save_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
-from models.controlnet import ControlNetModel as ControlNext
+from models.controlnext import ControlNetModel as ControlNext
 from models.unet import UNet2DConditionModel
+from models.controlnet import ControlNetModel
 from args import parse_args
 
 if is_wandb_available():
