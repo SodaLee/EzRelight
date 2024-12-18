@@ -827,6 +827,8 @@ def main(args):
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 control_image = batch["lighting"].to(accelerator.device, dtype=torch.float32)
+                control_image = vae.encode(control_image).latent_dist.sample()
+                control_image = control_image * vae.config.scaling_factor
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
                     timesteps,

@@ -4,7 +4,7 @@ accelerate launch val_stage2.py \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
 --variant fp16 \
 --use_safetensors \
---output_dir "/data2/lihaochen/EzRelight_chps/stage2/try_1119_from_1115" \
+--output_dir "/data2/lihaochen/EzRelight_chps/stage2/try_1217_from_1216" \
 --logging_dir "logs" \
 --resolution 1024 \
 --gradient_checkpointing \
@@ -21,4 +21,4 @@ accelerate launch val_stage2.py \
 --data_files "stage2_test.parquet" \
 --cache_dir "/data3/lihaochen/BGRelight/stage1_cache" \
 --caption_column "caption" \
---stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage2/try_1119_from_1115/checkpoints/final"
+--stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage2/try_1217_from_1216/checkpoints/final"

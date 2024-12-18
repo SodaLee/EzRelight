@@ -1159,9 +1159,13 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         dtype,
         do_classifier_free_guidance=False,
         guess_mode=False,
+        refer_vae=False,
+        generator=None,
     ):
         # image = self.control_image_processor.preprocess(image, height=height, width=width).to(dtype=torch.float32)
         image = image.to(dtype=torch.float32)
+        if refer_vae:
+            image = retrieve_latents(self.vae.encode(image), generator=generator)
         image_batch_size = image.shape[0]
 
         if image_batch_size == 1:
@@ -1711,6 +1715,8 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                 dtype=controlnet.dtype,
                 do_classifier_free_guidance=self.do_classifier_free_guidance,
                 guess_mode=guess_mode,
+                refer_vae=True,
+                generator=generator,
             )
             height, width = control_image.shape[-2:]
         elif isinstance(controlnet, MultiControlNetModel):
@@ -1727,6 +1733,8 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                     dtype=controlnet.dtype,
                     do_classifier_free_guidance=self.do_classifier_free_guidance,
                     guess_mode=guess_mode,
+                    refer_vae=True,
+                    generator=generator,
                 )
 
                 control_images.append(control_image_)
