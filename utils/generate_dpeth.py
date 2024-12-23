@@ -21,33 +21,25 @@ depth = prediction["depth"]  # Depth in [m].
 focallength_px = prediction["focallength_px"]  # Focal length in pixels.
 '''
 
-log_file = '/data3/lihaochen/datasets/BGRelight/depth.log'
+log_file = '/data2/lihaochen/datasets/BGRelight/depth.log'
 f = open(log_file, 'w+')
 
 for i in range(5):
-    img_dir = os.path.join('/data3/lihaochen/datasets/BGRelight/imgs', f'{i:05d}')
+    img_dir = os.path.join('/data2/lihaochen/datasets/BGRelight/imgs', f'{i:05d}')
     img_list = sorted(os.listdir(img_dir))
 
     t = len(img_list)
     loop = tqdm.tqdm(enumerate(img_list), total=len(img_list))
     for j, img_file in loop:
-        if not os.path.exists(os.path.join(img_dir, img_file, 'relight_0.png')):
-            f.write(f'Folder: {i:05d}, image: {img_file}, no relight_0.png skip\n')
+        if not os.path.exists(os.path.join(img_dir, img_file, 'refined.png')):
+            f.write(f'Folder: {i:05d}, image: {img_file}, no refined.png skip\n')
             continue
-        if os.path.exists(os.path.join(img_dir, img_file, 'img_depth_0.npy')) and os.path.exists(os.path.join(img_dir, img_file, 'bg_depth_0.npy')):
-            continue
-
-        img_path = os.path.join('/data3/lihaochen/datasets/CosmicManHQ-1.0/LAION-5B/laion1B-nolang', f'{i:05d}', img_file)
-        if os.path.exists(img_path + '.webp'):
-            img_path += '.webp'
-        elif os.path.exists(img_path + '.jpg'):
-            img_path += '.jpg'
-        else:
-            f.write(f'Folder: {i:05d}, image: {img_file}, no img file skip\n')
+        if os.path.exists(os.path.join(img_dir, img_file, 'img_depth.npy')) and os.path.exists(os.path.join(img_dir, img_file, 'bg_depth.npy')):
             continue
 
-        bg_path = os.path.join(img_dir, img_file, 'refined_0.png')
-        mask = Image.open(os.path.join(img_dir, img_file, 'mask_0.png'))
+        img_path = os.path.join(img_dir, img_file, 'base.png')
+        bg_path = os.path.join(img_dir, img_file, 'refined.png')
+        mask = Image.open(os.path.join(img_dir, img_file, 'mask.png'))
         w, h = mask.size
         mask = np.array(mask)
 
@@ -68,7 +60,7 @@ for i in range(5):
         focallength_px = prediction["focallength_px"]  # Focal length in pixels.
         depth = depth.squeeze().cpu().numpy()
         depth = np.where(mask > 0, depth, 0)
-        np.save(os.path.join(img_dir, img_file, 'img_depth_0.npy'), depth)
+        np.save(os.path.join(img_dir, img_file, 'img_depth.npy'), depth)
 
         # estimate bg depth
         # Load and preprocess an image.
@@ -80,4 +72,4 @@ for i in range(5):
         depth = prediction["depth"]
         focallength_px = prediction["focallength_px"]
         depth = depth.squeeze().cpu().numpy()
-        np.save(os.path.join(img_dir, img_file, 'bg_depth_0.npy'), depth)
+        np.save(os.path.join(img_dir, img_file, 'bg_depth.npy'), depth)

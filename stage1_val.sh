@@ -12,8 +12,6 @@ accelerate launch val_stage1.py \
 --proportion_empty_prompts 0.2 \
 --controlnet_scale_factor 1.0 \
 --train_batch_size 1 \
---save_weights_increaments \
---load_weights_increaments \
 --mixed_precision fp16 \
 --checkpointing_steps 2000 \
 --enable_xformers_memory_efficient_attention \

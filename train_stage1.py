@@ -60,7 +60,7 @@ from safetensors.torch import load_file, save_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
 from models.controlnext import ControlNetModel as ControlNext
 from models.unet import UNet2DConditionModel
-from models.controlnet import ControlNetModel
+from models.lightenc import LightEnc
 from args import parse_args
 
 if is_wandb_available():
@@ -77,7 +77,7 @@ if is_torch_npu_available():
     torch.npu.config.allow_internal_format = False
 
 
-def save_models(unet, controlnet, controlnext, output_dir, args, orig_unet_sd=None):
+def save_models(unet, controlnext, lightenc, output_dir, args, orig_unet_sd=None):
     os.makedirs(output_dir, exist_ok=True)
     unet_sd = unet.state_dict()
     pattern = re.compile(args.unet_trainable_param_pattern)
@@ -86,9 +86,8 @@ def save_models(unet, controlnet, controlnext, output_dir, args, orig_unet_sd=No
         for k, v in unet_sd.items():
             unet_sd[k] = unet_sd[k].detach().cpu() - orig_unet_sd[k]
     save_file(unet_sd, os.path.join(output_dir, "unet_weight_increasements.safetensors"))
-    save_file(controlnet.state_dict(), os.path.join(output_dir, "controlnet.safetensors"))
     save_file(controlnext.state_dict(), os.path.join(output_dir, "controlnext.safetensors"))
-
+    save_file(lightenc.state_dict(), os.path.join(output_dir, "lightenc.safetensors"))
 
 def import_model_class_from_model_name_or_path(
     pretrained_model_name_or_path: str, revision: str, subfolder: str = "text_encoder"
@@ -247,8 +246,9 @@ def prepare_train_dataset(dataset, accelerator):
     bg_image_transforms = v2.Compose(
         [
             v2.ToTensor(),
-            v2.Resize(size=args.resolution // 2, max_size=args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
-            v2.Pad([0, 256], fill=0.25, padding_mode='constant'),
+            v2.Resize(size=32, max_size=64, interpolation=v2.InterpolationMode.BILINEAR),
+            v2.CenterCrop(32),
+            v2.functional.horizontal_flip,
         ]
     )
 
@@ -286,7 +286,7 @@ def prepare_train_dataset(dataset, accelerator):
 
         lighting = [cv2.imread(lighting, cv2.IMREAD_UNCHANGED) for lighting in examples['lighting']]
         lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
-        lighting = [np.roll(l, -int(l.shape[1] * phi / 2), 1) for l, phi in zip(lighting, examples['phi'])]
+        lighting = [np.roll(l, l.shape[1] // 2 - int(l.shape[1] * phi / 2), 1) for l, phi in zip(lighting, examples['phi'])]
         lighting = [bg_image_transforms(l) for l in lighting]
 
         # phi = [torch.tensor(phi) for phi in examples['phi']]
@@ -468,12 +468,12 @@ def main(args):
         logger.info("Initializing unet weights from scratch")
         pass
 
-    controlnet = ControlNetModel.from_unet(unet, conditioning_channels=6)
-    if args.controlnet_model_name_or_path:
-        logger.info("Loading existing controlnet weights")
-        controlnet.load_state_dict(load_file(args.controlnet_model_name_or_path))
-    else:
-        logger.info("Initializing controlnet weights from scratch")
+    new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
+    new_conv_in.weight.zero_()
+    new_conv_in.weight[:, :4, :, :].copy_(unet.conv_in.weight)
+    new_conv_in.bias = unet.conv_in.bias
+    unet.conv_in = new_conv_in
+    unet._set_encoder_hid_proj(encoder_hid_dim=unet.encoder_hid_dim+3, cross_attention_dim=unet.cross_attention_dim)
 
     controlnext = ControlNext()
     if args.controlnext_model_name_or_path:
@@ -481,6 +481,13 @@ def main(args):
         controlnext.load_state_dict(load_file(args.controlnext_model_name_or_path))
     else:
         logger.info("Initializing controlnext weights from scratch")
+
+    lightenc = LightEnc()
+    if args.lightenc_model_name_or_path:
+        logger.info("Loading existing lightenc weights")
+        lightenc.load_state_dict(load_file(args.lightenc_model_name_or_path))
+    else:
+        logger.info("Initializing lightenc weights from scratch")
 
     def unwrap_model(model):
         model = accelerator.unwrap_model(model)
@@ -508,14 +515,12 @@ def main(args):
                     "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, please update xFormers to at least 0.0.17. See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
                 )
             unet.enable_xformers_memory_efficient_attention()
-            controlnet.enable_xformers_memory_efficient_attention()
             controlnext.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
-        controlnet.enable_gradient_checkpointing()
         controlnext.enable_gradient_checkpointing()
 
     # Check that all trainable models are in full precision
@@ -523,11 +528,6 @@ def main(args):
         " Please make sure to always have all model weights in full float32 precision when starting training - even if"
         " doing mixed precision training, copy of the weights should still be float32."
     )
-
-    if unwrap_model(controlnet).dtype != torch.float32:
-        raise ValueError(
-            f"Controlnet loaded as datatype {unwrap_model(controlnet).dtype}. {low_precision_error_string}"
-        )
     
     if unwrap_model(controlnext).dtype != torch.float32:
         raise ValueError(
@@ -579,15 +579,15 @@ def main(args):
         raise ValueError(f"Optimizer type {args.optimizer_type} not supported.")
 
     # Optimizer creation
-    controlnet.train()
-    controlnet.requires_grad_(True)
-    params_to_optimize = [{'params': list(controlnet.parameters()), 'lr': args.learning_rate_controlnet}]
-    logger.info(f"Number of trainable parameters in controlnet: {sum(p.numel() for p in controlnet.parameters() if p.requires_grad)}")
-
     controlnext.train()
     controlnext.requires_grad_(True)
     params_to_optimize = [{'params': list(controlnext.parameters()), 'lr': args.learning_rate_controlnext}]
     logger.info(f"Number of trainable parameters in controlnext: {sum(p.numel() for p in controlnext.parameters() if p.requires_grad)}")
+
+    lightenc.train()
+    lightenc.requires_grad_(True)
+    params_to_optimize.append({'params': list(lightenc.parameters()), 'lr': args.learning_rate_lightenc})
+    logger.info(f"Number of trainable parameters in lightenc: {sum(p.numel() for p in lightenc.parameters() if p.requires_grad)}")
 
     unet.train()
     unet.requires_grad_(True)
@@ -622,7 +622,6 @@ def main(args):
     # else:
     vae.to(accelerator.device, dtype=torch.float32)
     unet.to(accelerator.device, dtype=weight_dtype)
-    controlnet = controlnet.to(accelerator.device, dtype=torch.float32)
     controlnext = controlnext.to(accelerator.device, dtype=torch.float32)
     text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
@@ -708,8 +707,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    unet, controlnet, controlnext, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, controlnet, controlnext, optimizer, train_dataloader, lr_scheduler
+    unet, controlnext, lightenc, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        unet, controlnext, lightenc, optimizer, train_dataloader, lr_scheduler
     )
 
     patch_accelerator_for_fp16_training(accelerator)
@@ -738,17 +737,6 @@ def main(args):
         tracker_config.pop("bg_image")
 
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
-
-    # def patch_accelerator_for_fp16_training(accelerator):
-    #     org_unscale_grads = accelerator.scaler._unscale_grads_
-
-    #     def _unscale_grads_replacer(optimizer, inv_scale, found_inf, allow_fp16):
-    #         return org_unscale_grads(optimizer, inv_scale, found_inf, True)
-
-    #     accelerator.scaler._unscale_grads_ = _unscale_grads_replacer
-
-    # if args.mixed_precision == "fp16":
-    #     patch_accelerator_for_fp16_training(accelerator)
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -800,20 +788,29 @@ def main(args):
     )
     loss_recorder = LossRecorder(gamma=0.9)
 
-    image_logs = None
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, controlnet, controlnext):
+            with accelerator.accumulate(unet, controlnext, lightenc):
                 # Convert images to latent space
-                # if args.pretrained_vae_model_name_or_path is not None:
-                #     pixel_values = (batch["target"]*batch["mask"]).to(dtype=weight_dtype)
-                # else:
-                pixel_values = (batch["target"]*batch["mask"])
+                pixel_values = batch["target"]
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents = latents.to(weight_dtype)
 
+                pixel_values = batch["source"]
+                latents_source = vae.encode(pixel_values).latent_dist.sample()
+                latents_source = latents_source * vae.config.scaling_factor
+                if args.pretrained_vae_model_name_or_path is None:
+                    latents_source = latents_source.to(weight_dtype)
+
+                bg = torch.zeros_like(latents_source)
+                latents_bg = vae.encode(bg).latent_dist.sample()
+                latents_bg = latents_bg * vae.config.scaling_factor
+                if args.pretrained_vae_model_name_or_path is None:
+                    latents_bg = latents_bg.to(weight_dtype)
+
+                latents = torch.cat([latents, latents_source, latents_bg], dim=1)
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
@@ -826,18 +823,10 @@ def main(args):
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                control_image = (batch["source"]*batch["mask"]).to(accelerator.device, dtype=torch.float32)
                 lighting = batch["lighting"].to(accelerator.device, dtype=torch.float32)
-                control_image = torch.cat([control_image, lighting], dim=1)
-                down_block_res_samples, mid_block_res_sample = controlnet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=batch["prompt_ids"],
-                    controlnet_cond=control_image,
-                    conditioning_scale=1.0,
-                    added_cond_kwargs=batch["unet_added_conditions"],
-                    return_dict=False,
-                )
+                lighting = torch.reshape(lighting, (bsz, -1))
+                lighting = lightenc(lighting)
+                lighting = torch.reshape(lighting, (bsz, 3, 768))
 
                 # ControlNext conditioning.
                 controlnext_image = batch["depth"].to(accelerator.device, dtype=torch.float32)
@@ -849,15 +838,18 @@ def main(args):
                 )
                 controls['scale'] *= args.controlnext_scale_factor
 
+                added_conditions = batch["unet_added_conditions"]
+                added_conditions["lighting"] = lighting
+
+                print(batch["prompt_ids"].shape)
+
                 # Predict the noise residual
                 with accelerator.autocast():
                     model_pred = unet(
                         noisy_latents,
                         timesteps,
                         encoder_hidden_states=batch["prompt_ids"],
-                        added_cond_kwargs=batch["unet_added_conditions"],
-                        down_block_additional_residuals=down_block_res_samples,
-                        mid_block_additional_residual=mid_block_res_sample,
+                        added_cond_kwargs=added_conditions,
                         controls=controls,
                         return_dict=False,
                     )[0]
@@ -912,8 +904,8 @@ def main(args):
                         save_path = os.path.join(args.output_dir, "checkpoints", f"checkpoint-{global_step}")
                         save_models(
                             accelerator.unwrap_model(unet),
-                            accelerator.unwrap_model(controlnet),
                             accelerator.unwrap_model(controlnext),
+                            accelerator.unwrap_model(lightenc),
                             save_path,
                             args,
                             orig_unet_sd if args.save_weights_increaments else None,
@@ -937,8 +929,8 @@ def main(args):
         save_path = os.path.join(args.output_dir, "checkpoints", "final")
         save_models(
             accelerator.unwrap_model(unet),
-            accelerator.unwrap_model(controlnet),
             accelerator.unwrap_model(controlnext),
+            accelerator.unwrap_model(lightenc),
             save_path,
             args,
             orig_unet_sd if args.save_weights_increaments else None,

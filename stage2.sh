@@ -13,8 +13,6 @@ accelerate launch train_stage2.py \
 --controlnet_scale_factor 1.0 \
 --num_train_epochs 50 \
 --train_batch_size 2 \
---save_weights_increaments \
---load_weights_increaments \
 --mixed_precision fp16 \
 --checkpointing_steps 2000 \
 --enable_xformers_memory_efficient_attention \

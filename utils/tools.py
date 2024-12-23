@@ -111,6 +111,11 @@ def get_pipeline(
         unet_sd = utils.extract_unet_state_dict(unet_sd)
         unet_sd = utils.convert_sdxl_unet_state_dict_to_diffusers(unet_sd)
         unet = UNet2DConditionModel.from_config(UNET_CONFIG)
+        new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
+        new_conv_in.weight.zero_()
+        new_conv_in.weight[:, :4, :, :].copy_(unet.conv_in.weight)
+        new_conv_in.bias = unet.conv_in.bias
+        unet.conv_in = new_conv_in
         unet.load_state_dict(unet_sd, strict=True)
     else:
         unet = UNet2DConditionModel.from_pretrained(

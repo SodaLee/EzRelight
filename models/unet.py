@@ -1071,7 +1071,7 @@ class UNet2DConditionModel(
         self, encoder_hidden_states: torch.Tensor, added_cond_kwargs: Dict[str, Any]
     ) -> torch.Tensor:
         if self.encoder_hid_proj is not None and self.config.encoder_hid_dim_type == "text_proj":
-            encoder_hidden_states = self.encoder_hid_proj(encoder_hidden_states)
+            encoder_hidden_states = self.encoder_hid_proj(encoder_hidden_states, added_cond_kwargs.get("lighting"))
         elif self.encoder_hid_proj is not None and self.config.encoder_hid_dim_type == "text_image_proj":
             # Kandinsky 2.1 - style
             if "image_embeds" not in added_cond_kwargs:

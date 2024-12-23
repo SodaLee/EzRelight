@@ -457,6 +457,12 @@ def main(args):
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant, use_safetensors=args.use_safetensors,
     )
 
+    new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
+    new_conv_in.weight.zero_()
+    new_conv_in.weight[:, :4, :, :].copy_(unet.conv_in.weight)
+    new_conv_in.bias = unet.conv_in.bias
+    unet.conv_in = new_conv_in
+
     if args.load_weights_increaments or args.save_weights_increaments:
         import copy
         orig_unet_sd = copy.deepcopy(unet.state_dict())
