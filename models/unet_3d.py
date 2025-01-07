@@ -1,16 +1,3 @@
-# Copyright 2024 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -19,8 +6,6 @@ import torch.nn as nn
 import torch.utils.checkpoint
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.loaders import PeftAdapterMixin, UNet2DConditionLoadersMixin
-from diffusers.loaders.single_file_model import FromOriginalModelMixin
 from diffusers.utils import USE_PEFT_BACKEND, BaseOutput, deprecate, logging, scale_lora_layers, unscale_lora_layers
 from diffusers.models.activations import get_activation
 from diffusers.models.attention_processor import (
@@ -44,88 +29,22 @@ from diffusers.models.embeddings import (
     Timesteps,
 )
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.unets.unet_2d_blocks import (
+from .unet_3d_blocks import (
+    CrossAttnDownBlock3D,
+    CrossAttnUpBlock3D,
+    DownBlock3D,
+    UNetMidBlock3DCrossAttn,
+    UpBlock3D,
     get_down_block,
-    get_mid_block,
     get_up_block,
 )
-
+from .resnet import InflatedConv3d
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-UNET_CONFIG = {
-    "_class_name": "UNet2DConditionModel",
-    "_diffusers_version": "0.19.0.dev0",
-    "act_fn": "silu",
-    "addition_embed_type": "text_time",
-    "addition_embed_type_num_heads": 64,
-    "addition_time_embed_dim": 256,
-    "attention_head_dim": [
-        5,
-        10,
-        20
-    ],
-    "block_out_channels": [
-        320,
-        640,
-        1280
-    ],
-    "center_input_sample": False,
-    "class_embed_type": None,
-    "class_embeddings_concat": False,
-    "conv_in_kernel": 3,
-    "conv_out_kernel": 3,
-    "cross_attention_dim": 2048,
-    "cross_attention_norm": None,
-    "down_block_types": [
-        "DownBlock2D",
-        "CrossAttnDownBlock2D",
-        "CrossAttnDownBlock2D"
-    ],
-    "downsample_padding": 1,
-    "dual_cross_attention": False,
-    "encoder_hid_dim": None,
-    "encoder_hid_dim_type": None,
-    "flip_sin_to_cos": True,
-    "freq_shift": 0,
-    "in_channels": 4,
-    "layers_per_block": 2,
-    "mid_block_only_cross_attention": None,
-    "mid_block_scale_factor": 1,
-    "mid_block_type": "UNetMidBlock2DCrossAttn",
-    "norm_eps": 1e-05,
-    "norm_num_groups": 32,
-    "num_attention_heads": None,
-    "num_class_embeds": None,
-    "only_cross_attention": False,
-    "out_channels": 4,
-    "projection_class_embeddings_input_dim": 2816,
-    "resnet_out_scale_factor": 1.0,
-    "resnet_skip_time_act": False,
-    "resnet_time_scale_shift": "default",
-    "sample_size": 128,
-    "time_cond_proj_dim": None,
-    "time_embedding_act_fn": None,
-    "time_embedding_dim": None,
-    "time_embedding_type": "positional",
-    "timestep_post_act": None,
-    "transformer_layers_per_block": [
-        1,
-        2,
-        10
-    ],
-    "up_block_types": [
-        "CrossAttnUpBlock2D",
-        "CrossAttnUpBlock2D",
-        "UpBlock2D"
-    ],
-    "upcast_attention": None,
-    "use_linear_projection": True
-}
-
 
 @dataclass
-class UNet2DConditionOutput(BaseOutput):
+class UNet3DConditionOutput(BaseOutput):
     """
     The output of [`UNet2DConditionModel`].
 
@@ -137,8 +56,8 @@ class UNet2DConditionOutput(BaseOutput):
     sample: torch.Tensor = None
 
 
-class UNet2DConditionModel(
-    ModelMixin, ConfigMixin, FromOriginalModelMixin, UNet2DConditionLoadersMixin, PeftAdapterMixin
+class UNet3DConditionModel(
+    ModelMixin, ConfigMixin
 ):
     r"""
     A conditional 2D UNet model that takes a noisy sample, conditional state, and a timestep and returns a sample
@@ -418,61 +337,64 @@ class UNet2DConditionModel(
         # down
         output_channel = block_out_channels[0]
         for i, down_block_type in enumerate(down_block_types):
+            res = 2 ** i
             input_channel = output_channel
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
 
             down_block = get_down_block(
                 down_block_type,
-                num_layers=layers_per_block[i],
-                transformer_layers_per_block=transformer_layers_per_block[i],
+                num_layers=layers_per_block,
                 in_channels=input_channel,
                 out_channels=output_channel,
-                temb_channels=blocks_time_embed_dim,
+                temb_channels=time_embed_dim,
                 add_downsample=not is_final_block,
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
-                cross_attention_dim=cross_attention_dim[i],
-                num_attention_heads=num_attention_heads[i],
+                cross_attention_dim=cross_attention_dim,
+                attn_num_head_channels=attention_head_dim[i],
                 downsample_padding=downsample_padding,
                 dual_cross_attention=dual_cross_attention,
                 use_linear_projection=use_linear_projection,
                 only_cross_attention=only_cross_attention[i],
                 upcast_attention=upcast_attention,
                 resnet_time_scale_shift=resnet_time_scale_shift,
-                attention_type=attention_type,
-                resnet_skip_time_act=resnet_skip_time_act,
-                resnet_out_scale_factor=resnet_out_scale_factor,
-                cross_attention_norm=cross_attention_norm,
-                attention_head_dim=attention_head_dim[i] if attention_head_dim[i] is not None else output_channel,
-                dropout=dropout,
+
+                unet_use_cross_frame_attention=unet_use_cross_frame_attention,
+                unet_use_temporal_attention=unet_use_temporal_attention,
+                
+                use_motion_module=use_motion_module and (res in motion_module_resolutions) and (not motion_module_decoder_only),
+                motion_module_type=motion_module_type,
+                motion_module_kwargs=motion_module_kwargs,
             )
             self.down_blocks.append(down_block)
 
         # mid
-        self.mid_block = get_mid_block(
-            mid_block_type,
-            temb_channels=blocks_time_embed_dim,
-            in_channels=block_out_channels[-1],
-            resnet_eps=norm_eps,
-            resnet_act_fn=act_fn,
-            resnet_groups=norm_num_groups,
-            output_scale_factor=mid_block_scale_factor,
-            transformer_layers_per_block=transformer_layers_per_block[-1],
-            num_attention_heads=num_attention_heads[-1],
-            cross_attention_dim=cross_attention_dim[-1],
-            dual_cross_attention=dual_cross_attention,
-            use_linear_projection=use_linear_projection,
-            mid_block_only_cross_attention=mid_block_only_cross_attention,
-            upcast_attention=upcast_attention,
-            resnet_time_scale_shift=resnet_time_scale_shift,
-            attention_type=attention_type,
-            resnet_skip_time_act=resnet_skip_time_act,
-            cross_attention_norm=cross_attention_norm,
-            attention_head_dim=attention_head_dim[-1],
-            dropout=dropout,
-        )
+        if mid_block_type == "UNetMidBlock3DCrossAttn":
+            self.mid_block = UNetMidBlock3DCrossAttn(
+                in_channels=block_out_channels[-1],
+                temb_channels=time_embed_dim,
+                resnet_eps=norm_eps,
+                resnet_act_fn=act_fn,
+                output_scale_factor=mid_block_scale_factor,
+                resnet_time_scale_shift=resnet_time_scale_shift,
+                cross_attention_dim=cross_attention_dim,
+                attn_num_head_channels=attention_head_dim[-1],
+                resnet_groups=norm_num_groups,
+                dual_cross_attention=dual_cross_attention,
+                use_linear_projection=use_linear_projection,
+                upcast_attention=upcast_attention,
+
+                unet_use_cross_frame_attention=unet_use_cross_frame_attention,
+                unet_use_temporal_attention=unet_use_temporal_attention,
+                
+                use_motion_module=use_motion_module and motion_module_mid_block,
+                motion_module_type=motion_module_type,
+                motion_module_kwargs=motion_module_kwargs,
+            )
+        else:
+            raise ValueError(f"unknown mid_block_type : {mid_block_type}")
 
         # count how many layers upsample the images
         self.num_upsamplers = 0
@@ -1115,7 +1037,7 @@ class UNet2DConditionModel(
         encoder_attention_mask: Optional[torch.Tensor] = None,
         controls: Optional[Dict[str, torch.Tensor]] = None,
         return_dict: bool = True,
-    ) -> Union[UNet2DConditionOutput, Tuple]:
+    ) -> Union[UNet3DConditionOutput, Tuple]:
         r"""
         The [`UNet2DConditionModel`] forward method.
 
@@ -1384,4 +1306,46 @@ class UNet2DConditionModel(
         if not return_dict:
             return (sample,)
 
-        return UNet2DConditionOutput(sample=sample)
+        return UNet3DConditionOutput(sample=sample)
+    
+    @classmethod
+    def from_pretrained_2d(cls, pretrained_model_path, subfolder=None, unet_additional_kwargs=None):
+        if subfolder is not None:
+            pretrained_model_path = os.path.join(pretrained_model_path, subfolder)
+        print(f"loaded temporal unet's pretrained weights from {pretrained_model_path} ...")
+
+        config_file = os.path.join(pretrained_model_path, 'config.json')
+        if not os.path.isfile(config_file):
+            raise RuntimeError(f"{config_file} does not exist")
+        with open(config_file, "r") as f:
+            config = json.load(f)
+        config["_class_name"] = cls.__name__
+        config["down_block_types"] = [
+            "CrossAttnDownBlock3D",
+            "CrossAttnDownBlock3D",
+            "CrossAttnDownBlock3D",
+            "DownBlock3D"
+        ]
+        config["up_block_types"] = [
+            "UpBlock3D",
+            "CrossAttnUpBlock3D",
+            "CrossAttnUpBlock3D",
+            "CrossAttnUpBlock3D"
+        ]
+        # config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
+
+        from diffusers.utils import WEIGHTS_NAME
+        model = cls.from_config(config, **unet_additional_kwargs)
+        model_file = os.path.join(pretrained_model_path, WEIGHTS_NAME)
+        if not os.path.isfile(model_file):
+            raise RuntimeError(f"{model_file} does not exist")
+        state_dict = torch.load(model_file, map_location="cpu")
+
+        m, u = model.load_state_dict(state_dict, strict=False)
+        print(f"### missing keys: {len(m)}; \n### unexpected keys: {len(u)};")
+        # print(f"### missing keys:\n{m}\n### unexpected keys:\n{u}\n")
+        
+        params = [p.numel() if "temporal" in n else 0 for n, p in model.named_parameters()]
+        print(f"### Temporal Module Parameters: {sum(params) / 1e6} M")
+        
+        return model

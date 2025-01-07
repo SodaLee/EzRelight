@@ -29,10 +29,16 @@ def parse_args(input_args=None):
         help="Path to pretrained unet safetensors file if you want to continue training.",
     )
     parser.add_argument(
-        "--controlnet_model_name_or_path",
+        "--lightenc_model_name_or_path",
         type=str,
         default=None,
-        help="Path to pretrained controlnet safetensors file if you want to continue training.",
+        help="Path to pretrained lightenc safetensors file if you want to continue training.",
+    )
+    parser.add_argument(
+        "--consistency_mlp_model_name_or_path",
+        type=str,
+        default=None,
+        help="Path to pretrained consistency mlp safetensors file if you want to continue training.",
     )
     parser.add_argument(
         "--controlnext_model_name_or_path",
@@ -499,7 +505,8 @@ def parse_args(input_args=None):
 
     if args.stage1_chp_path is not None:
         args.pretrained_unet_model_name_or_path = os.path.join(args.stage1_chp_path, "unet_weight_increasements.safetensors")
-        args.controlnet_model_name_or_path = os.path.join(args.stage1_chp_path, "controlnet.safetensors")
+        args.lightenc_model_name_or_path = os.path.join(args.stage1_chp_path, "lightenc.safetensors")
         args.controlnext_model_name_or_path = os.path.join(args.stage1_chp_path, "controlnext.safetensors")
+        args.consistency_mlp_model_name_or_path = os.path.join(args.stage1_chp_path, "consistency_mlp.safetensors")
 
     return args

@@ -60,7 +60,7 @@ from safetensors.torch import load_file, save_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
 from models.controlnext import ControlNetModel as ControlNext
 from models.unet import UNet2DConditionModel
-from models.lightenc import LightEnc
+from models.lightenc import LightEnc, MLP5
 from args import parse_args
 
 if is_wandb_available():
@@ -76,8 +76,20 @@ logger = get_logger(__name__)
 if is_torch_npu_available():
     torch.npu.config.allow_internal_format = False
 
+class MaskedMSELoss(torch.nn.Module):
+    def __init__(self):
+        super(MaskedMSELoss, self).__init__()
 
-def save_models(unet, controlnext, lightenc, output_dir, args, orig_unet_sd=None):
+    def forward(self, pred, target, mask):
+        # 计算预测值与真实值之间的平方差
+        squared_diff = (pred - target) ** 2
+        # 应用掩码
+        masked_squared_diff = squared_diff * mask
+        # 计算平均损失
+        loss = masked_squared_diff.sum() / mask.sum()
+        return loss
+
+def save_models(unet, controlnext, lightenc, consistency_mlp, output_dir, args, orig_unet_sd=None):
     os.makedirs(output_dir, exist_ok=True)
     unet_sd = unet.state_dict()
     pattern = re.compile(args.unet_trainable_param_pattern)
@@ -88,6 +100,7 @@ def save_models(unet, controlnext, lightenc, output_dir, args, orig_unet_sd=None
     save_file(unet_sd, os.path.join(output_dir, "unet_weight_increasements.safetensors"))
     save_file(controlnext.state_dict(), os.path.join(output_dir, "controlnext.safetensors"))
     save_file(lightenc.state_dict(), os.path.join(output_dir, "lightenc.safetensors"))
+    save_file(consistency_mlp.state_dict(), os.path.join(output_dir, "consistency_mlp.safetensors"))
 
 def import_model_class_from_model_name_or_path(
     pretrained_model_name_or_path: str, revision: str, subfolder: str = "text_encoder"
@@ -469,11 +482,13 @@ def main(args):
         pass
 
     new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
-    new_conv_in.weight.zero_()
-    new_conv_in.weight[:, :4, :, :].copy_(unet.conv_in.weight)
-    new_conv_in.bias = unet.conv_in.bias
+    torch.nn.init.zeros_(new_conv_in.weight)
+    new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
+    new_conv_in.bias.data = unet.conv_in.bias.data
     unet.conv_in = new_conv_in
-    unet._set_encoder_hid_proj(encoder_hid_dim=unet.encoder_hid_dim+3, cross_attention_dim=unet.cross_attention_dim)
+    # unet.config.encoder_hid_dim_type = "text_proj"
+    # print(unet.config.cross_attention_dim)
+    # unet._set_encoder_hid_proj(encoder_hid_dim=2048+3, cross_attention_dim=unet.config.cross_attention_dim, encoder_hid_dim_type='text_proj')
 
     controlnext = ControlNext()
     if args.controlnext_model_name_or_path:
@@ -488,6 +503,14 @@ def main(args):
         lightenc.load_state_dict(load_file(args.lightenc_model_name_or_path))
     else:
         logger.info("Initializing lightenc weights from scratch")
+
+    consistency_mlp = MLP5(128)
+    if args.consistency_mlp_model_name_or_path:
+        logger.info("Loading existing consistency_mlp weights")
+        consistency_mlp.load_state_dict(load_file(args.consistency_mlp_model_name_or_path))
+    else:
+        logger.info("Initializing consistency_mlp weights from scratch")
+    consistency_loss_fn = MaskedMSELoss()
 
     def unwrap_model(model):
         model = accelerator.unwrap_model(model)
@@ -586,8 +609,13 @@ def main(args):
 
     lightenc.train()
     lightenc.requires_grad_(True)
-    params_to_optimize.append({'params': list(lightenc.parameters()), 'lr': args.learning_rate_lightenc})
+    params_to_optimize.append({'params': list(lightenc.parameters()), 'lr': args.learning_rate_controlnext})
     logger.info(f"Number of trainable parameters in lightenc: {sum(p.numel() for p in lightenc.parameters() if p.requires_grad)}")
+
+    consistency_mlp.train()
+    consistency_mlp.requires_grad_(True)
+    params_to_optimize.append({'params': list(consistency_mlp.parameters()), 'lr': args.learning_rate_controlnext})
+    logger.info(f"Number of trainable parameters in consistency_mlp: {sum(p.numel() for p in consistency_mlp.parameters() if p.requires_grad)}")
 
     unet.train()
     unet.requires_grad_(True)
@@ -707,8 +735,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    unet, controlnext, lightenc, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, controlnext, lightenc, optimizer, train_dataloader, lr_scheduler
+    unet, controlnext, lightenc, consistency_mlp, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        unet, controlnext, lightenc, consistency_mlp, optimizer, train_dataloader, lr_scheduler
     )
 
     patch_accelerator_for_fp16_training(accelerator)
@@ -790,7 +818,7 @@ def main(args):
 
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, controlnext, lightenc):
+            with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
                 # Convert images to latent space
                 pixel_values = batch["target"]
                 latents = vae.encode(pixel_values).latent_dist.sample()
@@ -804,13 +832,13 @@ def main(args):
                 if args.pretrained_vae_model_name_or_path is None:
                     latents_source = latents_source.to(weight_dtype)
 
-                bg = torch.zeros_like(latents_source)
+                bg = torch.zeros_like(pixel_values)
                 latents_bg = vae.encode(bg).latent_dist.sample()
                 latents_bg = latents_bg * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents_bg = latents_bg.to(weight_dtype)
 
-                latents = torch.cat([latents, latents_source, latents_bg], dim=1)
+                # latents = torch.cat([latents, latents_source, latents_bg], dim=1)
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
@@ -822,11 +850,24 @@ def main(args):
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                noisy_latents = torch.cat([noisy_latents, latents_source, latents_bg], dim=1)
 
                 lighting = batch["lighting"].to(accelerator.device, dtype=torch.float32)
+
+                # random 4x4 mask resize to 32x32
+                l_mask = torch.randn((bsz, 1, 4, 4), device=accelerator.device, dtype=torch.float32)
+                l_mask = F.interpolate(l_mask, size=(32, 32), mode='bilinear', align_corners=False)
+                l1 = lighting * l_mask
+                l2 = lighting * (1 - l_mask)
                 lighting = torch.reshape(lighting, (bsz, -1))
+                l1 = torch.reshape(l1, (bsz, -1))
+                l2 = torch.reshape(l2, (bsz, -1))
                 lighting = lightenc(lighting)
-                lighting = torch.reshape(lighting, (bsz, 3, 768))
+                l1 = lightenc(l1)
+                l2 = lightenc(l2)
+                lighting = torch.reshape(lighting, (bsz, 3, 2048))
+                l1 = torch.reshape(l1, (bsz, 3, 2048))
+                l2 = torch.reshape(l2, (bsz, 3, 2048))
 
                 # ControlNext conditioning.
                 controlnext_image = batch["depth"].to(accelerator.device, dtype=torch.float32)
@@ -839,20 +880,20 @@ def main(args):
                 controls['scale'] *= args.controlnext_scale_factor
 
                 added_conditions = batch["unet_added_conditions"]
-                added_conditions["lighting"] = lighting
+                enc_hid = torch.cat([batch["prompt_ids"], lighting], dim=1)
 
-                print(batch["prompt_ids"].shape)
+                # print(batch["prompt_ids"].shape) # [2, 77, 2048]
 
                 # Predict the noise residual
                 with accelerator.autocast():
                     model_pred = unet(
                         noisy_latents,
                         timesteps,
-                        encoder_hidden_states=batch["prompt_ids"],
+                        encoder_hidden_states=enc_hid,
                         added_cond_kwargs=added_conditions,
                         controls=controls,
                         return_dict=False,
-                    )[0]
+                    )[0][:, :4, :, :]
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -862,6 +903,38 @@ def main(args):
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+
+                # process l1 & l2
+                enc_hid = torch.cat([batch["prompt_ids"], l1], dim=1)
+                with accelerator.autocast():
+                    model_pred_l1 = unet(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=enc_hid,
+                        added_cond_kwargs=added_conditions,
+                        controls=controls,
+                        return_dict=False,
+                    )[0][:, :4, :, :]
+                
+                enc_hid = torch.cat([batch["prompt_ids"], l2], dim=1)
+                with accelerator.autocast():
+                    model_pred_l2 = unet(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=enc_hid,
+                        added_cond_kwargs=added_conditions,
+                        controls=controls,
+                        return_dict=False,
+                    )[0][:, :4, :, :]
+
+                mlp_out = consistency_mlp(torch.cat([model_pred_l1, model_pred_l2], dim=1))
+                # resize mask to the same size as the model output
+                mask = batch["mask"].to(accelerator.device, dtype=torch.float32)
+                mask = F.interpolate(mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='bilinear', align_corners=False)
+
+                loss_c = consistency_loss_fn(mlp_out, target, mask)
+
+                loss = loss + 0.1 * loss_c
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
@@ -906,6 +979,7 @@ def main(args):
                             accelerator.unwrap_model(unet),
                             accelerator.unwrap_model(controlnext),
                             accelerator.unwrap_model(lightenc),
+                            accelerator.unwrap_model(consistency_mlp),
                             save_path,
                             args,
                             orig_unet_sd if args.save_weights_increaments else None,
@@ -931,6 +1005,7 @@ def main(args):
             accelerator.unwrap_model(unet),
             accelerator.unwrap_model(controlnext),
             accelerator.unwrap_model(lightenc),
+            accelerator.unwrap_model(consistency_mlp),
             save_path,
             args,
             orig_unet_sd if args.save_weights_increaments else None,
