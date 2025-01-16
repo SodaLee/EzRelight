@@ -10,45 +10,36 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model, transform = depth_pro.create_model_and_transforms(device=device)
 model.eval()
 
-'''
-# Load and preprocess an image.
-image, _, f_px = depth_pro.load_rgb(image_path)
-image = transform(image)
 
-# Run inference.
-prediction = model.infer(image, f_px=f_px)
-depth = prediction["depth"]  # Depth in [m].
-focallength_px = prediction["focallength_px"]  # Focal length in pixels.
-'''
+video_dir = os.path.join('/data/lihaochen/datasets/TikTok_dataset/')
+video_list = sorted(os.listdir(video_dir))
 
-log_file = '/data2/lihaochen/datasets/BGRelight/depth.log'
-f = open(log_file, 'w+')
+loop = tqdm.tqdm(video_list, total=len(video_list))
+for video in loop:
+    if not os.path.exists(os.path.join(video_dir, video, 'inpainted')):
+        continue
+    if os.path.exists(os.path.join(video_dir, video, 'img_depth')) and os.path.exists(os.path.join(video_dir, video, 'bg_depth.npy')):
+        continue
 
-for i in range(5):
-    img_dir = os.path.join('/data2/lihaochen/datasets/BGRelight/imgs', f'{i:05d}')
-    img_list = sorted(os.listdir(img_dir))
+    loop.set_description(f'video: {video}')
+    # if w * h > 6000000:
+    #     continue
 
-    t = len(img_list)
-    loop = tqdm.tqdm(enumerate(img_list), total=len(img_list))
-    for j, img_file in loop:
-        if not os.path.exists(os.path.join(img_dir, img_file, 'refined.png')):
-            f.write(f'Folder: {i:05d}, image: {img_file}, no refined.png skip\n')
-            continue
-        if os.path.exists(os.path.join(img_dir, img_file, 'img_depth.npy')) and os.path.exists(os.path.join(img_dir, img_file, 'bg_depth.npy')):
-            continue
+    if not os.path.exists(os.path.join(video_dir, video, 'img_depth')):
+        os.makedirs(os.path.join(video_dir, video, 'img_depth'))
 
-        img_path = os.path.join(img_dir, img_file, 'base.png')
-        bg_path = os.path.join(img_dir, img_file, 'refined.png')
-        mask = Image.open(os.path.join(img_dir, img_file, 'mask.png'))
-        w, h = mask.size
+    img_list = sorted(os.listdir(os.path.join(video_dir, video, 'images')))
+    mask_list = sorted(os.listdir(os.path.join(video_dir, video, 'masks')))
+    inner_loop = tqdm.tqdm(range(len(img_list)), total=len(img_list))
+    for i in inner_loop:
+        img_file = img_list[i]
+        mask_file = mask_list[i]
+        inner_loop.set_description(f'img: {img_file}')
+
+        img_path = os.path.join(video_dir, video, 'images', img_file)
+        mask_path = os.path.join(video_dir, video, 'masks', mask_file)
+        mask = Image.open(mask_path)
         mask = np.array(mask)
-
-        loop.set_description(f'Folder: {i:05d}, image: {img_file}, width: {w}, height: {h}')
-        if w * h > 6000000:
-            f.write(f'Folder: {i:05d}, image: {img_file}, width: {w}, height: {h}, too large\n')
-            f.flush()
-            continue
-
         # estimate image depth
         # Load and preprocess an image.
         image, _, f_px = depth_pro.load_rgb(img_path)
@@ -60,16 +51,18 @@ for i in range(5):
         focallength_px = prediction["focallength_px"]  # Focal length in pixels.
         depth = depth.squeeze().cpu().numpy()
         depth = np.where(mask > 0, depth, 0)
-        np.save(os.path.join(img_dir, img_file, 'img_depth.npy'), depth)
+        np.save(os.path.join(video_dir, video, 'img_depth', img_file.replace('.png', '.npy')), depth)
 
-        # estimate bg depth
-        # Load and preprocess an image.
-        image, _, f_px = depth_pro.load_rgb(bg_path)
-        image = transform(image)
+    bg_path = os.path.join(video_dir, video, 'refined.png')
 
-        # Run inference.
-        prediction = model.infer(image, f_px=f_px)
-        depth = prediction["depth"]
-        focallength_px = prediction["focallength_px"]
-        depth = depth.squeeze().cpu().numpy()
-        np.save(os.path.join(img_dir, img_file, 'bg_depth.npy'), depth)
+    # estimate bg depth
+    # Load and preprocess an image.
+    image, _, f_px = depth_pro.load_rgb(bg_path)
+    image = transform(image)
+
+    # Run inference.
+    prediction = model.infer(image, f_px=f_px)
+    depth = prediction["depth"]
+    focallength_px = prediction["focallength_px"]
+    depth = depth.squeeze().cpu().numpy()
+    np.save(os.path.join(video_dir, video, 'bg_depth.npy'), depth)
