@@ -820,13 +820,13 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
                 # Convert images to latent space
-                pixel_values = batch["target"]
+                pixel_values = batch["target"]*batch["mask"]
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents = latents.to(weight_dtype)
 
-                pixel_values = batch["source"]
+                pixel_values = batch["source"]*batch["mask"]
                 latents_source = vae.encode(pixel_values).latent_dist.sample()
                 latents_source = latents_source * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:

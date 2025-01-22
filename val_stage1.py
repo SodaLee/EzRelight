@@ -39,8 +39,8 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
     pipeline = tools.get_pipeline(
         args.pretrained_model_name_or_path,
         args.pretrained_unet_model_name_or_path,
-        args.controlnet_model_name_or_path,
         args.controlnext_model_name_or_path,
+        args.lightenc_model_name_or_path,
         vae_model_name_or_path=vae_path,
         lora_path=None,
         load_weight_increasement=args.load_weights_increaments,
@@ -75,14 +75,16 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         validation_image = batch["source"].to(dtype=weight_dtype)
         validation_prompt = batch["caption"][0]
         gt = batch["target"].to(dtype=weight_dtype)
-        inputs = batch["source"]*batch["mask"].to(dtype=weight_dtype)
+        inputs = batch["source"].to(dtype=weight_dtype)
 
         images = []
-        control_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
+        control_image = batch["source"].to(device, dtype=torch.float32)
+        control_image_2 = torch.zeros_like(control_image).to(device, dtype=torch.float32)
+
         lighting = batch["lighting"].to(device, dtype=torch.float32)
-        control_image = torch.cat([control_image, lighting], dim=1)
+
         controlnext_image = batch["depth"].to(device, dtype=torch.float32)
-        ref_image = (((batch["source"] - 0.5) * 2) *batch["mask"]).to(device, dtype=torch.float32)
+        ref_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
         controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
 
         with inference_ctx:
@@ -90,6 +92,8 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
                 prompt=validation_prompt,
                 image=inputs,
                 control_image=control_image,
+                control_image_2=control_image_2,
+                lighting=lighting,
                 controlnext_image=controlnext_image,
                 controlnet_scale=args.controlnext_scale_factor,
                 num_inference_steps=20,
@@ -208,8 +212,9 @@ def prepare_train_dataset(dataset):
     bg_image_transforms = v2.Compose(
         [
             v2.ToTensor(),
-            v2.Resize(size=args.resolution // 2, max_size=args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
-            v2.Pad([0, 256], fill=0.25, padding_mode='constant'),
+            v2.Resize(size=32, max_size=64, interpolation=v2.InterpolationMode.BILINEAR),
+            v2.CenterCrop(32),
+            v2.functional.horizontal_flip,
         ]
     )
 
@@ -228,16 +233,16 @@ def prepare_train_dataset(dataset):
         source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
         if args.enable_acestonemapping:
             source = [ACESToneMapping(s, 1.0) for s in source]
-        source = [conditioning_image_transforms(s) for s in source]
+        source = [image_transforms(s) for s in source]
 
         target = [cv2.imread(target, cv2.IMREAD_UNCHANGED) for target in examples['target']]
         target = [cv2.cvtColor(t, cv2.COLOR_BGR2RGB) for t in target]
         if args.enable_acestonemapping:
             target = [ACESToneMapping(t, 1.0) for t in target]
-        target = [conditioning_image_transforms(t) for t in target]
+        target = [image_transforms(t) for t in target]
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
-        mask = [1.0 - np.all(m == [191,191,191], axis=-1).astype(np.float32) for m in mask]
+        mask = [1 - np.all(m == [191,191,191], axis=-1).astype(np.float32) for m in mask]
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
 
@@ -247,7 +252,7 @@ def prepare_train_dataset(dataset):
 
         lighting = [cv2.imread(lighting, cv2.IMREAD_UNCHANGED) for lighting in examples['lighting']]
         lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
-        lighting = [np.roll(l, -int(l.shape[1] * phi / 2), 1) for l, phi in zip(lighting, examples['phi'])]
+        lighting = [np.roll(l, l.shape[1] // 2 - int(l.shape[1] * phi / 2), 1) for l, phi in zip(lighting, examples['phi'])]
         lighting = [bg_image_transforms(l) for l in lighting]
 
         # phi = [torch.tensor(phi) for phi in examples['phi']]

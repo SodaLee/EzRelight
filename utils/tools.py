@@ -6,7 +6,7 @@ from safetensors.torch import load_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
 from models.unet import UNet2DConditionModel
 from models.controlnext import ControlNetModel as ControlNext
-from models.controlnet import ControlNetModel
+from models.lightenc import LightEnc, MLP5
 from . import utils
 
 UNET_CONFIG = {
@@ -90,8 +90,9 @@ CONTROLNET_CONFIG = {
 def get_pipeline(
     pretrained_model_name_or_path,
     unet_model_name_or_path,
-    controlnet_model_name_or_path,
     controlnext_model_name_or_path,
+    lightenc_model_name_or_path,
+    # consistency_mlp_model_name_or_path,
     vae_model_name_or_path=None,
     lora_path=None,
     load_weight_increasement=False,
@@ -112,9 +113,9 @@ def get_pipeline(
         unet_sd = utils.convert_sdxl_unet_state_dict_to_diffusers(unet_sd)
         unet = UNet2DConditionModel.from_config(UNET_CONFIG)
         new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
-        new_conv_in.weight.zero_()
-        new_conv_in.weight[:, :4, :, :].copy_(unet.conv_in.weight)
-        new_conv_in.bias = unet.conv_in.bias
+        torch.nn.init.zeros_(new_conv_in.weight)
+        new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
+        new_conv_in.bias.data = unet.conv_in.bias.data
         unet.conv_in = new_conv_in
         unet.load_state_dict(unet_sd, strict=True)
     else:
@@ -126,6 +127,12 @@ def get_pipeline(
             use_safetensors=use_safetensors,
             subfolder="unet",
         )
+        new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
+        torch.nn.init.zeros_(new_conv_in.weight)
+        new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
+        new_conv_in.bias.data = unet.conv_in.bias.data
+        unet.conv_in = new_conv_in
+        
     unet = unet.to(dtype=torch.float16)
     pipeline_init_kwargs["unet"] = unet
 
@@ -134,11 +141,14 @@ def get_pipeline(
         vae = AutoencoderKL.from_pretrained(vae_model_name_or_path, cache_dir=hf_cache_dir, torch_dtype=torch.float16).to(device)
         pipeline_init_kwargs["vae"] = vae
 
-    if controlnet_model_name_or_path is not None:
-        pipeline_init_kwargs["controlnet"] = ControlNetModel.from_unet(unet, conditioning_channels=6)
-
     if controlnext_model_name_or_path is not None:
         pipeline_init_kwargs["controlnext"] = ControlNext.from_config(CONTROLNET_CONFIG).to(device, dtype=torch.float32)  # init
+        pipeline_init_kwargs["controlnet"] = ControlNext.from_config(CONTROLNET_CONFIG).to(device, dtype=torch.float32)
+
+    if lightenc_model_name_or_path is not None:
+        print(f"loading lightenc from {lightenc_model_name_or_path}")
+        lightenc = LightEnc().to(device, dtype=torch.float32)
+        lightenc.load_state_dict(load_file(lightenc_model_name_or_path))
 
     print(f"loading pipeline from {pretrained_model_name_or_path}")
     if os.path.isfile(pretrained_model_name_or_path):
@@ -169,14 +179,6 @@ def get_pipeline(
             torch_dtype=torch.float16,
             cache_dir=hf_cache_dir,
         )
-    if controlnet_model_name_or_path is not None:
-        print(f"loading controlnext controlnet from {controlnet_model_name_or_path}")
-        pipeline.load_controlnext_controlnet_weights(
-            controlnet_model_name_or_path,
-            use_safetensors=True,
-            torch_dtype=torch.float32,
-            cache_dir=hf_cache_dir,
-        )
     if controlnext_model_name_or_path is not None:
         print(f"loading controlnext controlnext from {controlnext_model_name_or_path}")
         pipeline.load_controlnext_controlnext_weights(
@@ -186,6 +188,7 @@ def get_pipeline(
             cache_dir=hf_cache_dir,
         )
     pipeline.set_progress_bar_config()
+    pipeline.lightenc = lightenc
     pipeline = pipeline.to(device, dtype=torch.float16)
 
     if lora_path is not None:

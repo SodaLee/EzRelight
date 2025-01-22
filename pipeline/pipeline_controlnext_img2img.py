@@ -413,7 +413,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
     ):
         self.load_controlnext_unet_weights(pretrained_model_name_or_path_or_dict, load_weight_increasement, **kwargs)
         kwargs['torch_dtype'] = torch.float32
-        self.load_controlnext_controlnet_weights(pretrained_model_name_or_path_or_dict, **kwargs)
+        # self.load_controlnext_controlnet_weights(pretrained_model_name_or_path_or_dict, **kwargs)
 
     def load_controlnext_unet_weights(
         self,
@@ -436,6 +436,11 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                     state_dict[k] += unet_sd[k]
                 else:
                     state_dict[k] = unet_sd[k]
+        else:
+            unet_sd = self.unet.state_dict()
+            for k in unet_sd.keys():
+                if k not in state_dict:
+                    state_dict[k] = unet_sd[k]
         self.unet.load_state_dict(state_dict)
 
     @classmethod
@@ -449,31 +454,31 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
             kwargs['weight_name'] = UNET_WEIGHT_NAME_SAFE if kwargs.get('use_safetensors', False) else UNET_WEIGHT_NAME
         return cls.controlnext_state_dict(pretrained_model_name_or_path_or_dict, **kwargs)
 
-    def load_controlnext_controlnet_weights(
-        self,
-        pretrained_model_name_or_path_or_dict: Union[str, Dict[str, torch.Tensor]],
-        **kwargs,
-    ):
-        if self.controlnet is None:
-            raise ValueError("No ControlNeXt ControlNet found in the pipeline.")
-        if isinstance(pretrained_model_name_or_path_or_dict, dict):
-            pretrained_model_name_or_path_or_dict = pretrained_model_name_or_path_or_dict.copy()
+    # def load_controlnext_controlnet_weights(
+    #     self,
+    #     pretrained_model_name_or_path_or_dict: Union[str, Dict[str, torch.Tensor]],
+    #     **kwargs,
+    # ):
+    #     if self.controlnet is None:
+    #         raise ValueError("No ControlNeXt ControlNet found in the pipeline.")
+    #     if isinstance(pretrained_model_name_or_path_or_dict, dict):
+    #         pretrained_model_name_or_path_or_dict = pretrained_model_name_or_path_or_dict.copy()
 
-        state_dict = self.controlnext_controlnet_state_dict(pretrained_model_name_or_path_or_dict, **kwargs)
+    #     state_dict = self.controlnext_controlnet_state_dict(pretrained_model_name_or_path_or_dict, **kwargs)
 
-        logger.info(f"Loading ControlNeXt ControlNet")
-        self.controlnet.load_state_dict(state_dict, strict=True)
+    #     logger.info(f"Loading ControlNeXt ControlNet")
+    #     self.controlnet.load_state_dict(state_dict, strict=True)
 
-    @classmethod
-    @validate_hf_hub_args
-    def controlnext_controlnet_state_dict(
-        cls,
-        pretrained_model_name_or_path_or_dict: Union[str, Dict[str, torch.Tensor]],
-        **kwargs,
-    ):
-        if 'weight_name' not in kwargs:
-            kwargs['weight_name'] = CONTROLNEXT_WEIGHT_NAME_SAFE if kwargs.get('use_safetensors', False) else CONTROLNEXT_WEIGHT_NAME
-        return cls.controlnext_state_dict(pretrained_model_name_or_path_or_dict, **kwargs)
+    # @classmethod
+    # @validate_hf_hub_args
+    # def controlnext_controlnet_state_dict(
+    #     cls,
+    #     pretrained_model_name_or_path_or_dict: Union[str, Dict[str, torch.Tensor]],
+    #     **kwargs,
+    # ):
+    #     if 'weight_name' not in kwargs:
+    #         kwargs['weight_name'] = CONTROLNEXT_WEIGHT_NAME_SAFE if kwargs.get('use_safetensors', False) else CONTROLNEXT_WEIGHT_NAME
+    #     return cls.controlnext_state_dict(pretrained_model_name_or_path_or_dict, **kwargs)
     
     def load_controlnext_controlnext_weights(
         self,
@@ -589,6 +594,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         self,
         prompt: str,
         prompt_2: Optional[str] = None,
+        light_image: Optional[torch.Tensor] = None,
         device: Optional[torch.device] = None,
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
@@ -720,6 +726,13 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                 prompt_embeds_list.append(prompt_embeds)
 
             prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
+
+            if light_image is not None:
+                bsz = prompt_embeds.shape[0]
+                lighting = torch.reshape(light_image, (bsz, -1))
+                lighting = self.lightenc(lighting)
+                lighting = torch.reshape(lighting, (bsz, 3, 2048))
+                prompt_embeds = torch.cat((prompt_embeds, lighting), dim=1)
 
         # get unconditional embeddings for classifier free guidance
         zero_out_negative_prompt = negative_prompt is None and self.config.force_zeros_for_empty_prompt
@@ -1010,62 +1023,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                 )
 
         # Check `image`
-        is_compiled = hasattr(F, "scaled_dot_product_attention") and isinstance(
-            self.controlnet, torch._dynamo.eval_frame.OptimizedModule
-        )
-        if (
-            isinstance(self.controlnet, ControlNetModel)
-            or is_compiled
-            and isinstance(self.controlnet._orig_mod, ControlNetModel)
-        ):
-            self.check_image(image, prompt, prompt_embeds)
-        elif (
-            isinstance(self.controlnet, MultiControlNetModel)
-            or is_compiled
-            and isinstance(self.controlnet._orig_mod, MultiControlNetModel)
-        ):
-            if not isinstance(image, list):
-                raise TypeError("For multiple controlnets: `image` must be type `list`")
-
-            # When `image` is a nested list:
-            # (e.g. [[canny_image_1, pose_image_1], [canny_image_2, pose_image_2]])
-            elif any(isinstance(i, list) for i in image):
-                raise ValueError("A single batch of multiple conditionings are supported at the moment.")
-            elif len(image) != len(self.controlnet.nets):
-                raise ValueError(
-                    f"For multiple controlnets: `image` must have the same length as the number of controlnets, but got {len(image)} images and {len(self.controlnet.nets)} ControlNets."
-                )
-
-            for image_ in image:
-                self.check_image(image_, prompt, prompt_embeds)
-        else:
-            assert False
-
-        # Check `controlnet_conditioning_scale`
-        if (
-            isinstance(self.controlnet, ControlNetModel)
-            or is_compiled
-            and isinstance(self.controlnet._orig_mod, ControlNetModel)
-        ):
-            if not isinstance(controlnet_conditioning_scale, float):
-                raise TypeError("For single controlnet: `controlnet_conditioning_scale` must be type `float`.")
-        elif (
-            isinstance(self.controlnet, MultiControlNetModel)
-            or is_compiled
-            and isinstance(self.controlnet._orig_mod, MultiControlNetModel)
-        ):
-            if isinstance(controlnet_conditioning_scale, list):
-                if any(isinstance(i, list) for i in controlnet_conditioning_scale):
-                    raise ValueError("A single batch of multiple conditionings are supported at the moment.")
-            elif isinstance(controlnet_conditioning_scale, list) and len(controlnet_conditioning_scale) != len(
-                self.controlnet.nets
-            ):
-                raise ValueError(
-                    "For multiple controlnets: When `controlnet_conditioning_scale` is specified as `list`, it must have"
-                    " the same length as the number of controlnets"
-                )
-        else:
-            assert False
+        self.check_image(image, prompt, prompt_embeds)
 
         if not isinstance(control_guidance_start, (tuple, list)):
             control_guidance_start = [control_guidance_start]
@@ -1077,12 +1035,6 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
             raise ValueError(
                 f"`control_guidance_start` has {len(control_guidance_start)} elements, but `control_guidance_end` has {len(control_guidance_end)} elements. Make sure to provide the same number of elements to each list."
             )
-
-        if isinstance(self.controlnet, MultiControlNetModel):
-            if len(control_guidance_start) != len(self.controlnet.nets):
-                raise ValueError(
-                    f"`control_guidance_start`: {control_guidance_start} has {len(control_guidance_start)} elements but there are {len(self.controlnet.nets)} controlnets available. Make sure to provide {len(self.controlnet.nets)}."
-                )
 
         for start, end in zip(control_guidance_start, control_guidance_end):
             if start >= end:
@@ -1382,13 +1334,17 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         prompt: Union[str, List[str]] = None,
         prompt_2: Optional[Union[str, List[str]]] = None,
         image: PipelineImageInput = None,
-        control_image: PipelineImageInput = None,
+        control_image: PipelineImageInput = None, # source
+        control_image_2: Optional[PipelineImageInput] = None, # bg
+        light_image: Optional[PipelineImageInput] = None, # light
         controlnext_image: Optional[PipelineImageInput] = None,
         controlnet_scale: Optional[float] = 1.0,
         height: Optional[int] = None,
         width: Optional[int] = None,
         strength: float = 0.8,
         num_inference_steps: int = 50,
+        timesteps: List[int] = None,
+        denoising_end: Optional[float] = None,
         guidance_scale: float = 5.0,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         negative_prompt_2: Optional[Union[str, List[str]]] = None,
@@ -1411,7 +1367,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         control_guidance_end: Union[float, List[float]] = 1.0,
         original_size: Tuple[int, int] = None,
         crops_coords_top_left: Tuple[int, int] = (0, 0),
-        target_size: Tuple[int, int] = None,
+        target_size: Optional[Tuple[int, int]] = None,
         negative_original_size: Optional[Tuple[int, int]] = None,
         negative_crops_coords_top_left: Tuple[int, int] = (0, 0),
         negative_target_size: Optional[Tuple[int, int]] = None,
@@ -1606,20 +1562,6 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
             callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
 
-        controlnet = self.controlnet._orig_mod if is_compiled_module(self.controlnet) else self.controlnet
-
-        # align format for control guidance
-        if not isinstance(control_guidance_start, list) and isinstance(control_guidance_end, list):
-            control_guidance_start = len(control_guidance_end) * [control_guidance_start]
-        elif not isinstance(control_guidance_end, list) and isinstance(control_guidance_start, list):
-            control_guidance_end = len(control_guidance_start) * [control_guidance_end]
-        elif not isinstance(control_guidance_start, list) and not isinstance(control_guidance_end, list):
-            mult = len(controlnet.nets) if isinstance(controlnet, MultiControlNetModel) else 1
-            control_guidance_start, control_guidance_end = (
-                mult * [control_guidance_start],
-                mult * [control_guidance_end],
-            )
-
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
             prompt,
@@ -1656,16 +1598,6 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
 
         device = self._execution_device
 
-        if isinstance(controlnet, MultiControlNetModel) and isinstance(controlnet_conditioning_scale, float):
-            controlnet_conditioning_scale = [controlnet_conditioning_scale] * len(controlnet.nets)
-
-        global_pool_conditions = (
-            controlnet.config.global_pool_conditions
-            if isinstance(controlnet, ControlNetModel)
-            else controlnet.nets[0].config.global_pool_conditions
-        )
-        guess_mode = guess_mode or global_pool_conditions
-
         # 3.1. Encode input prompt
         text_encoder_lora_scale = (
             self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
@@ -1678,6 +1610,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         ) = self.encode_prompt(
             prompt,
             prompt_2,
+            light_image,
             device,
             num_images_per_prompt,
             self.do_classifier_free_guidance,
@@ -1704,46 +1637,6 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         # 4. Prepare image and controlnet_conditioning_image
         image = self.image_processor.preprocess(image, height=height, width=width).to(dtype=torch.float32)
 
-        if isinstance(controlnet, ControlNetModel):
-            control_image = self.prepare_control_image(
-                image=control_image,
-                width=width,
-                height=height,
-                batch_size=batch_size * num_images_per_prompt,
-                num_images_per_prompt=num_images_per_prompt,
-                device=device,
-                dtype=controlnet.dtype,
-                do_classifier_free_guidance=self.do_classifier_free_guidance,
-                guess_mode=guess_mode,
-                refer_vae=False,
-                generator=generator,
-            )
-            height, width = control_image.shape[-2:]
-        elif isinstance(controlnet, MultiControlNetModel):
-            control_images = []
-
-            for control_image_ in control_image:
-                control_image_ = self.prepare_control_image(
-                    image=control_image_,
-                    width=width,
-                    height=height,
-                    batch_size=batch_size * num_images_per_prompt,
-                    num_images_per_prompt=num_images_per_prompt,
-                    device=device,
-                    dtype=controlnet.dtype,
-                    do_classifier_free_guidance=self.do_classifier_free_guidance,
-                    guess_mode=guess_mode,
-                    refer_vae=False,
-                    generator=generator,
-                )
-
-                control_images.append(control_image_)
-
-            control_image = control_images
-            height, width = control_image[0].shape[-2:]
-        else:
-            assert False
-
         # 5. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, strength, device)
@@ -1762,18 +1655,29 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                 generator,
                 True,
             )
+            latents_source = self.prepare_latents(
+                control_image,
+                latent_timestep,
+                batch_size,
+                num_images_per_prompt,
+                prompt_embeds.dtype,
+                device,
+                generator,
+                False,
+            )
+            latents_bg = self.prepare_latents(
+                control_image_2,
+                latent_timestep,
+                batch_size,
+                num_images_per_prompt,
+                prompt_embeds.dtype,
+                device,
+                generator,
+                False,
+            )
 
         # 7. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-
-        # 7.1 Create tensor stating which controlnets to keep
-        controlnet_keep = []
-        for i in range(len(timesteps)):
-            keeps = [
-                1.0 - float(i / len(timesteps) < s or (i + 1) / len(timesteps) > e)
-                for s, e in zip(control_guidance_start, control_guidance_end)
-            ]
-            controlnet_keep.append(keeps[0] if isinstance(controlnet, ControlNetModel) else keeps)
 
         # 7.2 Prepare added time ids & embeddings
         if isinstance(control_image, list):
@@ -1834,51 +1738,11 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                latents_c = torch.cat([latents, latents_source, latents_bg], dim=1)
+                latent_model_input = torch.cat([latents_c] * 2) if self.do_classifier_free_guidance else latents_c
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
-
-                # controlnet(s) inference
-                if guess_mode and self.do_classifier_free_guidance:
-                    # Infer ControlNet only for the conditional batch.
-                    control_model_input = latents
-                    control_model_input = self.scheduler.scale_model_input(control_model_input, t)
-                    controlnet_prompt_embeds = prompt_embeds.chunk(2)[1]
-                    controlnet_added_cond_kwargs = {
-                        "text_embeds": add_text_embeds.chunk(2)[1],
-                        "time_ids": add_time_ids.chunk(2)[1],
-                    }
-                else:
-                    control_model_input = latent_model_input
-                    controlnet_prompt_embeds = prompt_embeds
-                    controlnet_added_cond_kwargs = added_cond_kwargs
-
-                if isinstance(controlnet_keep[i], list):
-                    cond_scale = [c * s for c, s in zip(controlnet_conditioning_scale, controlnet_keep[i])]
-                else:
-                    controlnet_cond_scale = controlnet_conditioning_scale
-                    if isinstance(controlnet_cond_scale, list):
-                        controlnet_cond_scale = controlnet_cond_scale[0]
-                    cond_scale = controlnet_cond_scale * controlnet_keep[i]
-
-                down_block_res_samples, mid_block_res_sample = self.controlnet(
-                    control_model_input,
-                    t,
-                    encoder_hidden_states=controlnet_prompt_embeds,
-                    controlnet_cond=control_image,
-                    conditioning_scale=cond_scale,
-                    guess_mode=guess_mode,
-                    added_cond_kwargs=controlnet_added_cond_kwargs,
-                    return_dict=False,
-                )
-
-                if guess_mode and self.do_classifier_free_guidance:
-                    # Inferred ControlNet only for the conditional batch.
-                    # To apply the output of ControlNet to both the unconditional and conditional batches,
-                    # add 0 to the unconditional batch to keep it unchanged.
-                    down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
-                    mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
 
                 if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
                     added_cond_kwargs["image_embeds"] = image_embeds
@@ -1905,8 +1769,6 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                     t,
                     encoder_hidden_states=prompt_embeds,
                     cross_attention_kwargs=self.cross_attention_kwargs,
-                    down_block_additional_residuals=down_block_res_samples,
-                    mid_block_additional_residual=mid_block_res_sample,
                     added_cond_kwargs=added_cond_kwargs,
                     return_dict=False,
                     **unet_additional_args,
@@ -1919,7 +1781,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                latents = self.scheduler.step(noise_pred[:, :4, :, :], t, latents, **extra_step_kwargs, return_dict=False)[0]
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
                         # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
