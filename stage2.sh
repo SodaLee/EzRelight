@@ -1,10 +1,10 @@
-CUDA_VISIBLE_DEVICES="4,5,6,7" \
+CUDA_VISIBLE_DEVICES="0,1" \
 accelerate launch train_stage2.py \
 --pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
 --variant fp16 \
 --use_safetensors \
---output_dir "/data2/lihaochen/EzRelight_chps/stage2/try_1217_from_1216" \
+--output_dir "/data2/lihaochen/EzRelight_chps/stage2/try_0124_from_0122" \
 --logging_dir "logs" \
 --resolution 1024 \
 --gradient_checkpointing \
@@ -20,4 +20,4 @@ accelerate launch train_stage2.py \
 --data_files "stage2_train.parquet" \
 --cache_dir "/data3/lihaochen/BGRelight/stage1_cache" \
 --caption_column "caption" \
---stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage1/try_1216/checkpoints/final"
+--stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage1/try_0122/checkpoints/final"

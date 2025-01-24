@@ -64,7 +64,7 @@ from safetensors.torch import load_file, save_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
 from models.controlnext import ControlNetModel as ControlNext
 from models.unet import UNet2DConditionModel
-from models.lightenc import LightEnc, MLP5
+from models.lightenc import LightEnc, MLP5, DepthFusion
 from args import parse_args
 
 if is_wandb_available():
@@ -93,11 +93,12 @@ class MaskedMSELoss(torch.nn.Module):
         loss = masked_squared_diff.sum() / mask.sum()
         return loss
 
-def save_models(unet, controlnext, lightenc, consistency_mlp, output_dir, args, orig_unet_sd=None):
+def save_models(unet, controlnext, lightenc, consistency_mlp, depth_fusion, output_dir, args, orig_unet_sd=None):
     os.makedirs(output_dir, exist_ok=True)
     unet_sd = unet.state_dict()
     pattern = re.compile(args.unet_trainable_param_pattern)
-    unet_sd = {k: v for k, v in unet_sd.items() if pattern.match(k)}
+    extra_save = ["conv_in.weight", "conv_in.bias"]
+    unet_sd = {k: v for k, v in unet_sd.items() if pattern.match(k) or k in extra_save}
     if args.save_weights_increaments:
         for k, v in unet_sd.items():
             unet_sd[k] = unet_sd[k].detach().cpu() - orig_unet_sd[k]
@@ -105,6 +106,7 @@ def save_models(unet, controlnext, lightenc, consistency_mlp, output_dir, args, 
     save_file(controlnext.state_dict(), os.path.join(output_dir, "controlnext.safetensors"))
     save_file(lightenc.state_dict(), os.path.join(output_dir, "lightenc.safetensors"))
     save_file(consistency_mlp.state_dict(), os.path.join(output_dir, "consistency_mlp.safetensors"))
+    save_file(depth_fusion.state_dict(), os.path.join(output_dir, "depth_fusion.safetensors"))
 
 
 def import_model_class_from_model_name_or_path(
@@ -317,6 +319,8 @@ def prepare_train_dataset(dataset, accelerator):
         examples['mask'] = mask
         examples['depth'] = depth
         examples['lighting'] = lighting
+        examples['fg_depth'] = img_depth
+        examples['bg_depth'] = bg_depth
         
         return examples
 
@@ -341,6 +345,12 @@ def collate_fn(examples):
     depth = torch.stack([example["depth"] for example in examples])
     depth = depth.to(memory_format=torch.contiguous_format).float()
 
+    fg_depth = torch.stack([torch.tensor(example["fg_depth"]) for example in examples])
+    fg_depth = fg_depth.to(memory_format=torch.contiguous_format).float()
+
+    bg_depth = torch.stack([torch.tensor(example["bg_depth"]) for example in examples])
+    bg_depth = bg_depth.to(memory_format=torch.contiguous_format).float()
+
     lighting = torch.stack([example["lighting"] for example in examples])
     lighting = lighting.to(memory_format=torch.contiguous_format).float()
 
@@ -354,6 +364,8 @@ def collate_fn(examples):
         "target": target,
         "mask": mask,
         "depth": depth,
+        "fg_depth": fg_depth,
+        "bg_depth": bg_depth,
         "lighting": lighting,
         "prompt_ids": prompt_ids,
         "unet_added_conditions": {"text_embeds": add_text_embeds, "time_ids": add_time_ids},
@@ -470,9 +482,15 @@ def main(args):
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant, use_safetensors=args.use_safetensors,
     )
 
-    if args.load_weights_increaments or args.save_weights_increaments:
-        import copy
-        orig_unet_sd = copy.deepcopy(unet.state_dict())
+    # if args.load_weights_increaments or args.save_weights_increaments:
+    import copy
+    orig_unet_sd = copy.deepcopy(unet.state_dict())
+
+    new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
+    torch.nn.init.zeros_(new_conv_in.weight)
+    new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
+    new_conv_in.bias.data = unet.conv_in.bias.data
+    unet.conv_in = new_conv_in
 
     if args.pretrained_unet_model_name_or_path:
         logger.info("Loading existing unet weights")
@@ -484,16 +502,15 @@ def main(args):
                     unet_sd[k] += orig_unet_sd[k]
                 else:
                     unet_sd[k] = orig_unet_sd[k]
+        else:
+            logger.info("Loading unet weights")
+            for k in orig_unet_sd.keys():
+                if k not in unet_sd:
+                    unet_sd[k] = orig_unet_sd[k]
         unet.load_state_dict(unet_sd)
     else:
         logger.info("Initializing unet weights from scratch")
         pass
-
-    new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
-    torch.nn.init.zeros_(new_conv_in.weight)
-    new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
-    new_conv_in.bias.data = unet.conv_in.bias.data
-    unet.conv_in = new_conv_in
 
     controlnext = ControlNext()
     if args.controlnext_model_name_or_path:
@@ -516,6 +533,13 @@ def main(args):
     else:
         logger.info("Initializing consistency_mlp weights from scratch")
     consistency_loss_fn = MaskedMSELoss()
+
+    depth_fusion = DepthFusion(128)
+    if args.depth_fusion_model_name_or_path and os.path.exists(args.depth_fusion_model_name_or_path):
+        logger.info("Loading existing depth_fusion weights")
+        depth_fusion.load_state_dict(load_file(args.depth_fusion_model_name_or_path))
+    else:
+        logger.info("Initializing depth_fusion weights from scratch")
 
     def unwrap_model(model):
         model = accelerator.unwrap_model(model)
@@ -621,6 +645,11 @@ def main(args):
     consistency_mlp.requires_grad_(True)
     params_to_optimize.append({'params': list(consistency_mlp.parameters()), 'lr': args.learning_rate_controlnext})
     logger.info(f"Number of trainable parameters in consistency_mlp: {sum(p.numel() for p in consistency_mlp.parameters() if p.requires_grad)}")
+
+    depth_fusion.train()
+    depth_fusion.requires_grad_(True)
+    params_to_optimize.append({'params': list(depth_fusion.parameters()), 'lr': args.learning_rate_controlnext})
+    logger.info(f"Number of trainable parameters in depth_fusion: {sum(p.numel() for p in depth_fusion.parameters() if p.requires_grad)}")
 
     unet.train()
     unet.requires_grad_(True)
@@ -740,8 +769,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    unet, controlnext, lightenc, consistency_mlp, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, controlnext, lightenc, consistency_mlp, optimizer, train_dataloader, lr_scheduler
+    unet, controlnext, lightenc, consistency_mlp, depth_fusion, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        unet, controlnext, lightenc, consistency_mlp, depth_fusion, optimizer, train_dataloader, lr_scheduler
     )
 
     patch_accelerator_for_fp16_training(accelerator)
@@ -823,15 +852,15 @@ def main(args):
 
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
+            with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp, depth_fusion):
                 # Convert images to latent space
-                pixel_values = batch["target"]
+                pixel_values = batch["target"]*batch["mask"]
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents = latents.to(weight_dtype)
 
-                pixel_values = batch["source"]
+                pixel_values = batch["source"]*batch["mask"]
                 latents_source = vae.encode(pixel_values).latent_dist.sample()
                 latents_source = latents_source * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
@@ -874,8 +903,15 @@ def main(args):
                 l1 = torch.reshape(l1, (bsz, 3, 2048))
                 l2 = torch.reshape(l2, (bsz, 3, 2048))
 
+                fg_depth = batch["fg_depth"].to(accelerator.device, dtype=torch.float32)
+                bg_depth = batch["bg_depth"].to(accelerator.device, dtype=torch.float32)
+
+                depth = torch.cat([fg_depth, bg_depth], dim=1)
+                depth = depth_fusion(depth)
+
+                depth_loss = F.mse_loss(depth, batch["depth"], reduction="mean")
                 # ControlNext conditioning.
-                controlnext_image = batch["depth"].to(accelerator.device, dtype=torch.float32)
+                controlnext_image = depth
                 ref_image = (batch["source"]*batch["mask"]).to(accelerator.device, dtype=torch.float32)
                 controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
                 controls = controlnext(
@@ -939,7 +975,7 @@ def main(args):
 
                 loss_c = consistency_loss_fn(mlp_out, target, mask)
 
-                loss = loss + 0.1 * loss_c
+                loss = loss + 0.1 * loss_c + 0.1 * depth_loss
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
@@ -985,6 +1021,7 @@ def main(args):
                             accelerator.unwrap_model(controlnext),
                             accelerator.unwrap_model(lightenc),
                             accelerator.unwrap_model(consistency_mlp),
+                            accelerator.unwrap_model(depth_fusion),
                             save_path,
                             args,
                             orig_unet_sd if args.save_weights_increaments else None,
@@ -1011,6 +1048,7 @@ def main(args):
             accelerator.unwrap_model(controlnext),
             accelerator.unwrap_model(lightenc),
             accelerator.unwrap_model(consistency_mlp),
+            accelerator.unwrap_model(depth_fusion),
             save_path,
             args,
             orig_unet_sd if args.save_weights_increaments else None,

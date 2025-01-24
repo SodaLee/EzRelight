@@ -47,6 +47,12 @@ def parse_args(input_args=None):
         help="Path to pretrained controlnext safetensors file if you want to continue training.",
     )
     parser.add_argument(
+        "--depth_fusion_model_name_or_path",
+        type=str,
+        default=None,
+        help="Path to pretrained depth fusion safetensors file if you want to continue training.",
+    )
+    parser.add_argument(
         "--variant",
         type=str,
         default=None,
@@ -508,5 +514,6 @@ def parse_args(input_args=None):
         args.lightenc_model_name_or_path = os.path.join(args.stage1_chp_path, "lightenc.safetensors")
         args.controlnext_model_name_or_path = os.path.join(args.stage1_chp_path, "controlnext.safetensors")
         args.consistency_mlp_model_name_or_path = os.path.join(args.stage1_chp_path, "consistency_mlp.safetensors")
+        args.depth_fusion_model_name_or_path = os.path.join(args.stage1_chp_path, "depth_fusion.safetensors")
 
     return args

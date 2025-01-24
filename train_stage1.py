@@ -93,7 +93,8 @@ def save_models(unet, controlnext, lightenc, consistency_mlp, output_dir, args, 
     os.makedirs(output_dir, exist_ok=True)
     unet_sd = unet.state_dict()
     pattern = re.compile(args.unet_trainable_param_pattern)
-    unet_sd = {k: v for k, v in unet_sd.items() if pattern.match(k)}
+    extra_save = ["conv_in.weight", "conv_in.bias"]
+    unet_sd = {k: v for k, v in unet_sd.items() if pattern.match(k) or k in extra_save}
     if args.save_weights_increaments:
         for k, v in unet_sd.items():
             unet_sd[k] = unet_sd[k].detach().cpu() - orig_unet_sd[k]

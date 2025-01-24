@@ -41,3 +41,21 @@ class MLP5(nn.Module):
         x = F.relu(self.conv4(x))
         x = self.conv5(x)
         return x
+
+class DepthFusion(nn.Module):
+    def __init__(self, hidden_size=128):
+        super(DepthFusion, self).__init__()
+        self.hidden_size = hidden_size
+        self.conv1 = nn.Conv2d(in_channels=2, out_channels=self.hidden_size, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=self.hidden_size, out_channels=self.hidden_size, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(in_channels=self.hidden_size, out_channels=self.hidden_size, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv2d(in_channels=self.hidden_size, out_channels=self.hidden_size, kernel_size=3, padding=1)
+        self.conv5 = nn.Conv2d(in_channels=self.hidden_size, out_channels=1, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = self.conv5(x)
+        return x
