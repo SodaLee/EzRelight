@@ -305,6 +305,11 @@ def prepare_train_dataset(dataset, accelerator):
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
 
+
+        img_depth = [np.expand_dims(d, axis=-1) for d in img_depth]
+        img_depth = [conditioning_image_transforms(d) for d in img_depth]
+        bg_depth = [np.expand_dims(d, axis=-1) for d in bg_depth]
+        bg_depth = [conditioning_image_transforms(d) for d in bg_depth]
         depth = [np.expand_dims(d, axis=-1) for d in depth]
         depth = [conditioning_image_transforms(d) for d in depth]
 
@@ -345,10 +350,10 @@ def collate_fn(examples):
     depth = torch.stack([example["depth"] for example in examples])
     depth = depth.to(memory_format=torch.contiguous_format).float()
 
-    fg_depth = torch.stack([torch.tensor(example["fg_depth"]) for example in examples])
+    fg_depth = torch.stack([example["fg_depth"] for example in examples])
     fg_depth = fg_depth.to(memory_format=torch.contiguous_format).float()
 
-    bg_depth = torch.stack([torch.tensor(example["bg_depth"]) for example in examples])
+    bg_depth = torch.stack([example["bg_depth"] for example in examples])
     bg_depth = bg_depth.to(memory_format=torch.contiguous_format).float()
 
     lighting = torch.stack([example["lighting"] for example in examples])
