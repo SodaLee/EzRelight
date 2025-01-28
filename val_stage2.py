@@ -39,8 +39,9 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
     pipeline = tools.get_pipeline(
         args.pretrained_model_name_or_path,
         args.pretrained_unet_model_name_or_path,
-        args.controlnet_model_name_or_path,
         args.controlnext_model_name_or_path,
+        args.lightenc_model_name_or_path,
+        args.depth_fusion_model_name_or_path,
         vae_model_name_or_path=vae_path,
         lora_path=None,
         load_weight_increasement=args.load_weights_increaments,
@@ -75,14 +76,22 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         validation_image = batch["source"].to(dtype=weight_dtype)
         validation_prompt = batch["caption"][0]
         gt = batch["target"].to(dtype=weight_dtype)
-        inputs = batch["source"]*batch["mask"].to(dtype=weight_dtype)
+        inputs = (batch["source"]*batch["mask"]).to(dtype=weight_dtype)
 
         images = []
         control_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
+        control_image_2 = batch["bg"].to(device, dtype=torch.float32)
+
         lighting = batch["lighting"].to(device, dtype=torch.float32)
-        control_image = torch.cat([control_image, lighting], dim=1)
-        controlnext_image = batch["depth"].to(device, dtype=torch.float32)
-        ref_image = (((batch["source"] - 0.5) * 2) *batch["mask"]).to(device, dtype=torch.float32)
+
+        fg_depth = batch["fg_depth"].to(device, dtype=torch.float32)
+        bg_depth = batch["bg_depth"].to(device, dtype=torch.float32)
+        # depth = batch["depth"].to(device, dtype=torch.float32)
+        depth = torch.cat([fg_depth, bg_depth], dim=1)
+        depth = pipeline.depth_fusion(depth)
+
+        controlnext_image = depth
+        ref_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
         controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
 
         with inference_ctx:
@@ -90,6 +99,8 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
                 prompt=validation_prompt,
                 image=inputs,
                 control_image=control_image,
+                control_image_2=control_image_2,
+                lighting=lighting,
                 controlnext_image=controlnext_image,
                 controlnet_scale=args.controlnext_scale_factor,
                 num_inference_steps=20,
@@ -223,19 +234,20 @@ def prepare_train_dataset(dataset):
     bg_image_transforms = v2.Compose(
         [
             v2.ToTensor(),
-            v2.Resize(size=args.resolution // 2, max_size=args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
-            v2.Pad([0, 256], fill=0.25, padding_mode='constant'),
+            v2.Resize(size=32, max_size=64, interpolation=v2.InterpolationMode.BILINEAR),
+            v2.CenterCrop(32),
+            v2.functional.horizontal_flip,
         ]
     )
 
     def preprocess_train(examples):
         source = [cv2.imread(source, cv2.IMREAD_UNCHANGED) for source in examples['source']]
         source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
-        source = [conditioning_image_transforms(s) for s in source] # used for conditioning (important)
+        source = [image_transforms(s) for s in source]
 
         target = [cv2.imread(target, cv2.IMREAD_UNCHANGED) for target in examples['target']]
         target = [cv2.cvtColor(t, cv2.COLOR_BGR2RGB) for t in target]
-        target = [conditioning_image_transforms(t) for t in target] # IMPORTANT: in testing, normalization is not needed
+        target = [image_transforms(t) for t in target]
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
         mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
@@ -246,12 +258,21 @@ def prepare_train_dataset(dataset):
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
 
+
+        img_depth = [np.expand_dims(d, axis=-1) for d in img_depth]
+        img_depth = [conditioning_image_transforms(d) for d in img_depth]
+        bg_depth = [np.expand_dims(d, axis=-1) for d in bg_depth]
+        bg_depth = [conditioning_image_transforms(d) for d in bg_depth]
         depth = [np.expand_dims(d, axis=-1) for d in depth]
         depth = [conditioning_image_transforms(d) for d in depth]
 
         lighting = [cv2.imread(lighting, cv2.IMREAD_UNCHANGED) for lighting in examples['lighting']]
         lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
         lighting = [bg_image_transforms(l) for l in lighting]
+
+        bg = [cv2.imread(bg, cv2.IMREAD_UNCHANGED) for bg in examples['bg']]
+        bg = [cv2.cvtColor(b, cv2.COLOR_BGR2RGB) for b in bg]
+        bg = [conditioning_image_transforms(b) for b in bg]
 
         # phi = [torch.tensor(phi) for phi in examples['phi']]
 
@@ -260,6 +281,9 @@ def prepare_train_dataset(dataset):
         examples['mask'] = mask
         examples['depth'] = depth
         examples['lighting'] = lighting
+        examples['fg_depth'] = img_depth
+        examples['bg_depth'] = bg_depth
+        examples['bg'] = bg
         
         return examples
 
@@ -283,8 +307,17 @@ def collate_fn(examples):
     depth = torch.stack([example["depth"] for example in examples])
     depth = depth.to(memory_format=torch.contiguous_format).float()
 
+    fg_depth = torch.stack([example["fg_depth"] for example in examples])
+    fg_depth = fg_depth.to(memory_format=torch.contiguous_format).float()
+
+    bg_depth = torch.stack([example["bg_depth"] for example in examples])
+    bg_depth = bg_depth.to(memory_format=torch.contiguous_format).float()
+
     lighting = torch.stack([example["lighting"] for example in examples])
     lighting = lighting.to(memory_format=torch.contiguous_format).float()
+
+    bg = torch.stack([example["bg"] for example in examples])
+    bg = bg.to(memory_format=torch.contiguous_format).float()
 
     caption = [example["caption"] for example in examples]
 
@@ -293,7 +326,10 @@ def collate_fn(examples):
         "target": target,
         "mask": mask,
         "depth": depth,
+        "fg_depth": fg_depth,
+        "bg_depth": bg_depth,
         "lighting": lighting,
+        "bg": bg,
         "caption": caption,
     }
 

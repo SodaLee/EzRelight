@@ -317,6 +317,10 @@ def prepare_train_dataset(dataset, accelerator):
         lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
         lighting = [bg_image_transforms(l) for l in lighting]
 
+        bg = [cv2.imread(bg, cv2.IMREAD_UNCHANGED) for bg in examples['bg']]
+        bg = [cv2.cvtColor(b, cv2.COLOR_BGR2RGB) for b in bg]
+        bg = [conditioning_image_transforms(b) for b in bg]
+
         # phi = [torch.tensor(phi) for phi in examples['phi']]
 
         examples['source'] = source
@@ -326,6 +330,7 @@ def prepare_train_dataset(dataset, accelerator):
         examples['lighting'] = lighting
         examples['fg_depth'] = img_depth
         examples['bg_depth'] = bg_depth
+        examples['bg'] = bg
         
         return examples
 
@@ -359,6 +364,9 @@ def collate_fn(examples):
     lighting = torch.stack([example["lighting"] for example in examples])
     lighting = lighting.to(memory_format=torch.contiguous_format).float()
 
+    bg = torch.stack([example["bg"] for example in examples])
+    bg = bg.to(memory_format=torch.contiguous_format).float()
+
     prompt_ids = torch.stack([torch.tensor(example["prompt_embeds"]) for example in examples])
 
     add_text_embeds = torch.stack([torch.tensor(example["text_embeds"]) for example in examples])
@@ -372,6 +380,7 @@ def collate_fn(examples):
         "fg_depth": fg_depth,
         "bg_depth": bg_depth,
         "lighting": lighting,
+        "bg": bg,
         "prompt_ids": prompt_ids,
         "unet_added_conditions": {"text_embeds": add_text_embeds, "time_ids": add_time_ids},
     }
@@ -871,7 +880,7 @@ def main(args):
                 if args.pretrained_vae_model_name_or_path is None:
                     latents_source = latents_source.to(weight_dtype)
 
-                bg = torch.zeros_like(pixel_values)
+                bg = batch["bg"]
                 latents_bg = vae.encode(bg).latent_dist.sample()
                 latents_bg = latents_bg * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:

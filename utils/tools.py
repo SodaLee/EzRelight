@@ -6,7 +6,7 @@ from safetensors.torch import load_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
 from models.unet import UNet2DConditionModel
 from models.controlnext import ControlNetModel as ControlNext
-from models.lightenc import LightEnc, MLP5
+from models.lightenc import LightEnc, MLP5, DepthFusion
 from . import utils
 
 UNET_CONFIG = {
@@ -92,7 +92,7 @@ def get_pipeline(
     unet_model_name_or_path,
     controlnext_model_name_or_path,
     lightenc_model_name_or_path,
-    # consistency_mlp_model_name_or_path,
+    depth_fusion_model_name_or_path=None,
     vae_model_name_or_path=None,
     lora_path=None,
     load_weight_increasement=False,
@@ -149,6 +149,11 @@ def get_pipeline(
         print(f"loading lightenc from {lightenc_model_name_or_path}")
         lightenc = LightEnc().to(device, dtype=torch.float32)
         lightenc.load_state_dict(load_file(lightenc_model_name_or_path))
+    
+    if depth_fusion_model_name_or_path is not None:
+        print(f"loading depth_fusion from {depth_fusion_model_name_or_path}")
+        depth_fusion = DepthFusion(128).to(device, dtype=torch.float32)
+        depth_fusion.load_state_dict(load_file(depth_fusion_model_name_or_path))
 
     print(f"loading pipeline from {pretrained_model_name_or_path}")
     if os.path.isfile(pretrained_model_name_or_path):
@@ -189,6 +194,7 @@ def get_pipeline(
         )
     pipeline.set_progress_bar_config()
     pipeline.lightenc = lightenc
+    pipeline.depth_fusion = depth_fusion
     pipeline = pipeline.to(device, dtype=torch.float16)
 
     if lora_path is not None:

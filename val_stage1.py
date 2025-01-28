@@ -75,10 +75,10 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         validation_image = batch["source"].to(dtype=weight_dtype)
         validation_prompt = batch["caption"][0]
         gt = batch["target"].to(dtype=weight_dtype)
-        inputs = batch["source"].to(dtype=weight_dtype)
+        inputs = (batch["source"]*batch["mask"]).to(dtype=weight_dtype)
 
         images = []
-        control_image = batch["source"].to(device, dtype=torch.float32)
+        control_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
         control_image_2 = torch.zeros_like(control_image).to(device, dtype=torch.float32)
 
         lighting = batch["lighting"].to(device, dtype=torch.float32)
