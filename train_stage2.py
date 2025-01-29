@@ -300,7 +300,8 @@ def prepare_train_dataset(dataset, accelerator):
         mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
         img_depth = [np.load(depth) for depth in examples['img_depth']]
         bg_depth = [np.load(depth) for depth in examples['bg_depth']]
-        depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
+        # depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
+        depth = [np.load(depth) for depth in examples['fused_depth']]
         
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
@@ -917,15 +918,16 @@ def main(args):
                 l1 = torch.reshape(l1, (bsz, 3, 2048))
                 l2 = torch.reshape(l2, (bsz, 3, 2048))
 
-                fg_depth = batch["fg_depth"].to(accelerator.device, dtype=torch.float32)
-                bg_depth = batch["bg_depth"].to(accelerator.device, dtype=torch.float32)
+                # fg_depth = batch["fg_depth"].to(accelerator.device, dtype=torch.float32)
+                # bg_depth = batch["bg_depth"].to(accelerator.device, dtype=torch.float32)
+                raw_depth = batch["depth"].to(accelerator.device, dtype=torch.float32)
 
-                depth = torch.cat([fg_depth, bg_depth], dim=1)
-                depth = depth_fusion(depth)
+                # depth = torch.cat([fg_depth, bg_depth], dim=1)
+                # depth = depth_fusion(depth)
 
-                depth_loss = F.mse_loss(depth, batch["depth"], reduction="mean")
+                # depth_loss = F.mse_loss(depth.float(), raw_depth.float(), reduction="mean")
                 # ControlNext conditioning.
-                controlnext_image = depth
+                controlnext_image = raw_depth
                 ref_image = (batch["source"]*batch["mask"]).to(accelerator.device, dtype=torch.float32)
                 controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
                 controls = controlnext(
@@ -957,7 +959,7 @@ def main(args):
                     target = noise_scheduler.get_velocity(latents, noise, timesteps)
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                noise_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                 # process l1 & l2
                 enc_hid = torch.cat([batch["prompt_ids"], l1], dim=1)
@@ -989,7 +991,7 @@ def main(args):
 
                 loss_c = consistency_loss_fn(mlp_out, target, mask)
 
-                loss = loss + 0.1 * loss_c + 0.1 * depth_loss
+                loss = noise_loss + 0.1 * loss_c  #+ 0.01 * depth_loss
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
