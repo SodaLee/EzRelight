@@ -150,10 +150,12 @@ def get_pipeline(
         lightenc = LightEnc().to(device, dtype=torch.float32)
         lightenc.load_state_dict(load_file(lightenc_model_name_or_path))
     
-    if depth_fusion_model_name_or_path is not None:
+    if depth_fusion_model_name_or_path is not None and os.path.isfile(depth_fusion_model_name_or_path):
         print(f"loading depth_fusion from {depth_fusion_model_name_or_path}")
         depth_fusion = DepthFusion(128).to(device, dtype=torch.float32)
         depth_fusion.load_state_dict(load_file(depth_fusion_model_name_or_path))
+    else:
+        depth_fusion = None
 
     print(f"loading pipeline from {pretrained_model_name_or_path}")
     if os.path.isfile(pretrained_model_name_or_path):

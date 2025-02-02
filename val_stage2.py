@@ -100,7 +100,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
                 image=inputs,
                 control_image=control_image,
                 control_image_2=control_image_2,
-                lighting=lighting,
+                light_image=lighting,
                 controlnext_image=controlnext_image,
                 controlnet_scale=args.controlnext_scale_factor,
                 num_inference_steps=20,
@@ -191,7 +191,7 @@ def get_train_dataset(args):
     # We need to tokenize inputs and targets.
     # column_names = dataset["train"].column_names
 
-    train_dataset = dataset["train"].shuffle(seed=args.seed)
+    train_dataset = dataset["train"]
     if args.max_train_samples is not None:
         train_dataset = train_dataset.select(range(args.max_train_samples))
     return train_dataset
