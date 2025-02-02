@@ -84,11 +84,11 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
 
         lighting = batch["lighting"].to(device, dtype=torch.float32)
 
-        fg_depth = batch["fg_depth"].to(device, dtype=torch.float32)
-        bg_depth = batch["bg_depth"].to(device, dtype=torch.float32)
-        # depth = batch["depth"].to(device, dtype=torch.float32)
-        depth = torch.cat([fg_depth, bg_depth], dim=1)
-        depth = pipeline.depth_fusion(depth)
+        # fg_depth = batch["fg_depth"].to(device, dtype=torch.float32)
+        # bg_depth = batch["bg_depth"].to(device, dtype=torch.float32)
+        depth = batch["depth"].to(device, dtype=torch.float32)
+        # depth = torch.cat([fg_depth, bg_depth], dim=1)
+        # depth = pipeline.depth_fusion(depth)
 
         controlnext_image = depth
         ref_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
@@ -253,7 +253,8 @@ def prepare_train_dataset(dataset):
         mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
         img_depth = [np.load(depth) for depth in examples['img_depth']]
         bg_depth = [np.load(depth) for depth in examples['bg_depth']]
-        depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
+        # depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
+        depth = [np.load(depth) for depth in examples['fused_depth']]
         
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]

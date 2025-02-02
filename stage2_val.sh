@@ -4,7 +4,7 @@ accelerate launch val_stage2.py \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
 --variant fp16 \
 --use_safetensors \
---output_dir "/data2/lihaochen/EzRelight_chps/stage2/try_1217_from_1216" \
+--output_dir "/data2/lihaochen/EzRelight_chps/stage2/try_0124_from_0122" \
 --logging_dir "logs" \
 --resolution 1024 \
 --gradient_checkpointing \
@@ -17,6 +17,6 @@ accelerate launch val_stage2.py \
 --enable_xformers_memory_efficient_attention \
 --dataset_name "/data/lihaochen/projects/EzRelight" \
 --data_files "stage2_test.parquet" \
---cache_dir "/data3/lihaochen/BGRelight/stage1_cache" \
+--cache_dir "/data3/lihaochen/BGRelight/stage2_cache" \
 --caption_column "caption" \
---stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage2/try_1217_from_1216/checkpoints/final"
+--stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage2/try_0124_from_0122/checkpoints/final"

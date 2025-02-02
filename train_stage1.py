@@ -856,7 +856,7 @@ def main(args):
                 lighting = batch["lighting"].to(accelerator.device, dtype=torch.float32)
 
                 # random 4x4 mask resize to 32x32
-                l_mask = torch.randn((bsz, 1, 4, 4), device=accelerator.device, dtype=torch.float32)
+                l_mask = torch.rand((bsz, 1, 4, 4), device=accelerator.device, dtype=torch.float32)
                 l_mask = F.interpolate(l_mask, size=(32, 32), mode='bilinear', align_corners=False)
                 l1 = lighting * l_mask
                 l2 = lighting * (1 - l_mask)
