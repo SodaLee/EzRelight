@@ -92,6 +92,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
             image = pipeline(
                 prompt=validation_prompt,
                 image=inputs,
+                guidance_scale=1.0,
                 control_image=control_image,
                 control_image_2=control_image_2,
                 light_image=lighting,

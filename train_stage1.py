@@ -933,7 +933,8 @@ def main(args):
                 mask = batch["mask"].to(accelerator.device, dtype=torch.float32)
                 mask = F.interpolate(mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='bilinear', align_corners=False)
 
-                loss_c = consistency_loss_fn(mlp_out, target, mask)
+                # loss_c = consistency_loss_fn(mlp_out, target, mask)
+                loss_c = F.mse_loss(mlp_out.float(), target.float(), reduction="mean")
 
                 loss = loss + 0.1 * loss_c
 

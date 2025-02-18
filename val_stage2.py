@@ -98,6 +98,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
             image = pipeline(
                 prompt=validation_prompt,
                 image=inputs,
+                guidance_scale=1.0,
                 control_image=control_image,
                 control_image_2=control_image_2,
                 light_image=lighting,
@@ -269,6 +270,7 @@ def prepare_train_dataset(dataset):
 
         lighting = [cv2.imread(lighting, cv2.IMREAD_UNCHANGED) for lighting in examples['lighting']]
         lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
+        lighting = [np.roll(l, l.shape[1] // 2, 1) for l in lighting]
         lighting = [bg_image_transforms(l) for l in lighting]
 
         bg = [cv2.imread(bg, cv2.IMREAD_UNCHANGED) for bg in examples['bg']]

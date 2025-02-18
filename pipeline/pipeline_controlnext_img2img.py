@@ -728,11 +728,11 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
             prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
 
             if light_image is not None:
-                bsz = prompt_embeds.shape[0]
+                bsz = batch_size
                 lighting = torch.reshape(light_image, (bsz, -1))
                 lighting = self.lightenc(lighting)
                 lighting = torch.reshape(lighting, (bsz, 3, 2048))
-                prompt_embeds = torch.cat((prompt_embeds, lighting), dim=1)
+                prompt_embeds = torch.cat([prompt_embeds, lighting], dim=1)
 
         # get unconditional embeddings for classifier free guidance
         zero_out_negative_prompt = negative_prompt is None and self.config.force_zeros_for_empty_prompt
@@ -1157,10 +1157,10 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
             )
 
         latents_mean = latents_std = None
-        if hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None:
-            latents_mean = torch.tensor(self.vae.config.latents_mean).view(1, 4, 1, 1)
-        if hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None:
-            latents_std = torch.tensor(self.vae.config.latents_std).view(1, 4, 1, 1)
+        # if hasattr(self.vae.config, "latents_mean") and self.vae.config.latents_mean is not None:
+        #     latents_mean = torch.tensor(self.vae.config.latents_mean).view(1, 4, 1, 1)
+        # if hasattr(self.vae.config, "latents_std") and self.vae.config.latents_std is not None:
+        #     latents_std = torch.tensor(self.vae.config.latents_std).view(1, 4, 1, 1)
 
         # Offload text encoder if `enable_model_cpu_offload` was enabled
         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
@@ -1636,6 +1636,8 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
 
         # 4. Prepare image and controlnet_conditioning_image
         image = self.image_processor.preprocess(image, height=height, width=width).to(dtype=torch.float32)
+        control_image = self.image_processor.preprocess(control_image, height=height, width=width).to(dtype=torch.float32)
+        control_image_2 = self.image_processor.preprocess(control_image_2, height=height, width=width).to(dtype=torch.float32)
 
         # 5. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)

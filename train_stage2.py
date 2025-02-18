@@ -284,6 +284,7 @@ def prepare_train_dataset(dataset, accelerator):
             v2.ToTensor(),
             v2.Resize(size=32, max_size=64, interpolation=v2.InterpolationMode.BILINEAR),
             v2.CenterCrop(32),
+            v2.functional.horizontal_flip,
         ]
     )
 
@@ -316,6 +317,7 @@ def prepare_train_dataset(dataset, accelerator):
 
         lighting = [cv2.imread(lighting, cv2.IMREAD_UNCHANGED) for lighting in examples['lighting']]
         lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
+        lighting = [np.roll(l, l.shape[1] // 2, 1) for l in lighting]
         lighting = [bg_image_transforms(l) for l in lighting]
 
         bg = [cv2.imread(bg, cv2.IMREAD_UNCHANGED) for bg in examples['bg']]
@@ -869,13 +871,15 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp, depth_fusion):
                 # Convert images to latent space
-                pixel_values = batch["target"]*batch["mask"]
+                # pixel_values = batch["target"]*batch["mask"]
+                pixel_values = batch["target"]
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents = latents.to(weight_dtype)
 
                 pixel_values = batch["source"]*batch["mask"]
+                # pixel_values = batch["source"]
                 latents_source = vae.encode(pixel_values).latent_dist.sample()
                 latents_source = latents_source * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
@@ -989,7 +993,8 @@ def main(args):
                 mask = batch["mask"].to(accelerator.device, dtype=torch.float32)
                 mask = F.interpolate(mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='bilinear', align_corners=False)
 
-                loss_c = consistency_loss_fn(mlp_out, target, mask)
+                # loss_c = consistency_loss_fn(mlp_out, target, mask)
+                loss_c = F.mse_loss(mlp_out.float(), target.float(), reduction="mean")
 
                 loss = noise_loss + 0.1 * loss_c  #+ 0.01 * depth_loss
 
