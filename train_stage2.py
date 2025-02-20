@@ -299,8 +299,8 @@ def prepare_train_dataset(dataset, accelerator):
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
         mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
-        img_depth = [np.load(depth) for depth in examples['img_depth']]
-        bg_depth = [np.load(depth) for depth in examples['bg_depth']]
+        # img_depth = [np.load(depth) for depth in examples['img_depth']]
+        # bg_depth = [np.load(depth) for depth in examples['bg_depth']]
         # depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
         depth = [np.load(depth) for depth in examples['fused_depth']]
         
@@ -308,10 +308,10 @@ def prepare_train_dataset(dataset, accelerator):
         mask = [conditioning_image_transforms(m) for m in mask]
 
 
-        img_depth = [np.expand_dims(d, axis=-1) for d in img_depth]
-        img_depth = [conditioning_image_transforms(d) for d in img_depth]
-        bg_depth = [np.expand_dims(d, axis=-1) for d in bg_depth]
-        bg_depth = [conditioning_image_transforms(d) for d in bg_depth]
+        # img_depth = [np.expand_dims(d, axis=-1) for d in img_depth]
+        # img_depth = [conditioning_image_transforms(d) for d in img_depth]
+        # bg_depth = [np.expand_dims(d, axis=-1) for d in bg_depth]
+        # bg_depth = [conditioning_image_transforms(d) for d in bg_depth]
         depth = [np.expand_dims(d, axis=-1) for d in depth]
         depth = [conditioning_image_transforms(d) for d in depth]
 
@@ -331,8 +331,8 @@ def prepare_train_dataset(dataset, accelerator):
         examples['mask'] = mask
         examples['depth'] = depth
         examples['lighting'] = lighting
-        examples['fg_depth'] = img_depth
-        examples['bg_depth'] = bg_depth
+        # examples['fg_depth'] = img_depth
+        # examples['bg_depth'] = bg_depth
         examples['bg'] = bg
         
         return examples
@@ -358,11 +358,11 @@ def collate_fn(examples):
     depth = torch.stack([example["depth"] for example in examples])
     depth = depth.to(memory_format=torch.contiguous_format).float()
 
-    fg_depth = torch.stack([example["fg_depth"] for example in examples])
-    fg_depth = fg_depth.to(memory_format=torch.contiguous_format).float()
+    # fg_depth = torch.stack([example["fg_depth"] for example in examples])
+    # fg_depth = fg_depth.to(memory_format=torch.contiguous_format).float()
 
-    bg_depth = torch.stack([example["bg_depth"] for example in examples])
-    bg_depth = bg_depth.to(memory_format=torch.contiguous_format).float()
+    # bg_depth = torch.stack([example["bg_depth"] for example in examples])
+    # bg_depth = bg_depth.to(memory_format=torch.contiguous_format).float()
 
     lighting = torch.stack([example["lighting"] for example in examples])
     lighting = lighting.to(memory_format=torch.contiguous_format).float()
@@ -380,8 +380,8 @@ def collate_fn(examples):
         "target": target,
         "mask": mask,
         "depth": depth,
-        "fg_depth": fg_depth,
-        "bg_depth": bg_depth,
+        # "fg_depth": fg_depth,
+        # "bg_depth": bg_depth,
         "lighting": lighting,
         "bg": bg,
         "prompt_ids": prompt_ids,
@@ -871,15 +871,13 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp, depth_fusion):
                 # Convert images to latent space
-                # pixel_values = batch["target"]*batch["mask"]
-                pixel_values = batch["target"]
+                pixel_values = batch["target"]*batch["mask"]
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents = latents.to(weight_dtype)
 
                 pixel_values = batch["source"]*batch["mask"]
-                # pixel_values = batch["source"]
                 latents_source = vae.encode(pixel_values).latent_dist.sample()
                 latents_source = latents_source * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
@@ -992,7 +990,7 @@ def main(args):
                 # resize mask to the same size as the model output
                 mask = batch["mask"].to(accelerator.device, dtype=torch.float32)
                 mask = F.interpolate(mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='bilinear', align_corners=False)
-
+                
                 # loss_c = consistency_loss_fn(mlp_out, target, mask)
                 loss_c = F.mse_loss(mlp_out.float(), target.float(), reduction="mean")
 
@@ -1055,7 +1053,10 @@ def main(args):
             loss_ema: float = loss_recorder.ema
             logs = {"loss/step": loss, 'loss_avr/step': loss_avr, 'loss_ema/step': loss_ema, 'lr/step': lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
-            accelerator.log(logs, step=global_step)
+            tlogs = logs.copy()
+            tlogs['noise_loss'] = noise_loss.detach().item()
+            tlogs['loss_c'] = 0.1 * loss_c.detach().item()
+            accelerator.log(tlogs, step=global_step)
 
             if global_step >= args.max_train_steps:
                 break
