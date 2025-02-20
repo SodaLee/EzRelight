@@ -93,7 +93,7 @@ class MaskedMSELoss(torch.nn.Module):
         loss = masked_squared_diff.sum() / mask.sum()
         return loss
 
-def save_models(unet, controlnext, lightenc, consistency_mlp, depth_fusion, output_dir, args, orig_unet_sd=None):
+def save_models(unet, controlnext, lightenc, consistency_mlp, output_dir, args, orig_unet_sd=None):
     os.makedirs(output_dir, exist_ok=True)
     unet_sd = unet.state_dict()
     pattern = re.compile(args.unet_trainable_param_pattern)
@@ -106,7 +106,7 @@ def save_models(unet, controlnext, lightenc, consistency_mlp, depth_fusion, outp
     save_file(controlnext.state_dict(), os.path.join(output_dir, "controlnext.safetensors"))
     save_file(lightenc.state_dict(), os.path.join(output_dir, "lightenc.safetensors"))
     save_file(consistency_mlp.state_dict(), os.path.join(output_dir, "consistency_mlp.safetensors"))
-    save_file(depth_fusion.state_dict(), os.path.join(output_dir, "depth_fusion.safetensors"))
+    # save_file(depth_fusion.state_dict(), os.path.join(output_dir, "depth_fusion.safetensors"))
 
 
 def import_model_class_from_model_name_or_path(
@@ -551,12 +551,12 @@ def main(args):
         logger.info("Initializing consistency_mlp weights from scratch")
     consistency_loss_fn = MaskedMSELoss()
 
-    depth_fusion = DepthFusion(128)
-    if args.depth_fusion_model_name_or_path and os.path.exists(args.depth_fusion_model_name_or_path):
-        logger.info("Loading existing depth_fusion weights")
-        depth_fusion.load_state_dict(load_file(args.depth_fusion_model_name_or_path))
-    else:
-        logger.info("Initializing depth_fusion weights from scratch")
+    # depth_fusion = DepthFusion(128)
+    # if args.depth_fusion_model_name_or_path and os.path.exists(args.depth_fusion_model_name_or_path):
+    #     logger.info("Loading existing depth_fusion weights")
+    #     depth_fusion.load_state_dict(load_file(args.depth_fusion_model_name_or_path))
+    # else:
+    #     logger.info("Initializing depth_fusion weights from scratch")
 
     def unwrap_model(model):
         model = accelerator.unwrap_model(model)
@@ -663,10 +663,10 @@ def main(args):
     params_to_optimize.append({'params': list(consistency_mlp.parameters()), 'lr': args.learning_rate_controlnext})
     logger.info(f"Number of trainable parameters in consistency_mlp: {sum(p.numel() for p in consistency_mlp.parameters() if p.requires_grad)}")
 
-    depth_fusion.train()
-    depth_fusion.requires_grad_(True)
-    params_to_optimize.append({'params': list(depth_fusion.parameters()), 'lr': args.learning_rate_controlnext})
-    logger.info(f"Number of trainable parameters in depth_fusion: {sum(p.numel() for p in depth_fusion.parameters() if p.requires_grad)}")
+    # depth_fusion.train()
+    # depth_fusion.requires_grad_(True)
+    # params_to_optimize.append({'params': list(depth_fusion.parameters()), 'lr': args.learning_rate_controlnext})
+    # logger.info(f"Number of trainable parameters in depth_fusion: {sum(p.numel() for p in depth_fusion.parameters() if p.requires_grad)}")
 
     unet.train()
     unet.requires_grad_(True)
@@ -786,8 +786,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    unet, controlnext, lightenc, consistency_mlp, depth_fusion, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, controlnext, lightenc, consistency_mlp, depth_fusion, optimizer, train_dataloader, lr_scheduler
+    unet, controlnext, lightenc, consistency_mlp, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        unet, controlnext, lightenc, consistency_mlp, optimizer, train_dataloader, lr_scheduler
     )
 
     patch_accelerator_for_fp16_training(accelerator)
@@ -869,7 +869,7 @@ def main(args):
 
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp, depth_fusion):
+            with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
                 # Convert images to latent space
                 pixel_values = batch["target"]*batch["mask"]
                 latents = vae.encode(pixel_values).latent_dist.sample()
@@ -1040,7 +1040,6 @@ def main(args):
                             accelerator.unwrap_model(controlnext),
                             accelerator.unwrap_model(lightenc),
                             accelerator.unwrap_model(consistency_mlp),
-                            accelerator.unwrap_model(depth_fusion),
                             save_path,
                             args,
                             orig_unet_sd if args.save_weights_increaments else None,
@@ -1070,7 +1069,6 @@ def main(args):
             accelerator.unwrap_model(controlnext),
             accelerator.unwrap_model(lightenc),
             accelerator.unwrap_model(consistency_mlp),
-            accelerator.unwrap_model(depth_fusion),
             save_path,
             args,
             orig_unet_sd if args.save_weights_increaments else None,

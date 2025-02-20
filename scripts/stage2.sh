@@ -21,3 +21,5 @@ accelerate launch train_stage2.py \
 --cache_dir "/data3/lihaochen/BGRelight/stage2_cache" \
 --caption_column "caption" \
 --stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage1/try_0217/checkpoints/final"
+--lr_scheduler "polynomial" \
+--lr_power 0.98 \
