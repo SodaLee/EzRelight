@@ -622,8 +622,9 @@ def main(args):
     unet.requires_grad_(True)
     unet_params = []
     pattern = re.compile(args.unet_trainable_param_pattern)
+    extra_save = ["conv_in.weight", "conv_in.bias"]
     for name, param in unet.named_parameters():
-        if pattern.match(name):
+        if pattern.match(name) or name in extra_save:
             param.requires_grad = True
             unet_params.append(param)
         else:
