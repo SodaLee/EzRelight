@@ -872,7 +872,7 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
                 # Convert images to latent space
-                pixel_values = batch["target"]*batch["mask"]
+                pixel_values = batch["target"]
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
@@ -992,8 +992,8 @@ def main(args):
                 mask = batch["mask"].to(accelerator.device, dtype=torch.float32)
                 mask = F.interpolate(mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='bilinear', align_corners=False)
                 
-                loss_c = consistency_loss_fn(mlp_out, target, mask)
-                # loss_c = F.mse_loss(mlp_out.float(), target.float(), reduction="mean")
+                # loss_c = consistency_loss_fn(mlp_out, target, mask)
+                loss_c = F.mse_loss(mlp_out.float(), target.float(), reduction="mean")
 
                 loss = noise_loss + 0.1 * loss_c  #+ 0.01 * depth_loss
 
