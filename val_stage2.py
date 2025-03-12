@@ -258,7 +258,7 @@ def prepare_train_dataset(dataset):
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
         soft_mask = [m for m in mask]
-        mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
+        # mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
         img_depth = [np.load(depth) for depth in examples['img_depth']]
         bg_depth = [np.load(depth) for depth in examples['bg_depth']]
         # depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
