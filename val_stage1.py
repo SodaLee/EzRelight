@@ -74,8 +74,10 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
 
     for i, batch in tqdm.tqdm(enumerate(dataloader), total=len(dataloader)):
         validation_image = batch["source"].to(dtype=weight_dtype)
+        validation_image = (validation_image + 1) / 2.0
         validation_prompt = batch["caption"][0]
         gt = batch["target"].to(dtype=weight_dtype)
+        gt = (gt + 1) / 2.0
         inputs = (batch["source"]*batch["mask"]).to(dtype=weight_dtype)
 
         images = []
@@ -121,7 +123,6 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         formatted_images = []
         formatted_images.append(np.asarray(validation_image.permute(1, 2, 0).cpu()))
         for image in images:
-            # formatted_images.append(np.asarray(image.permute(1, 2, 0).cpu()) / 2 + 0.5)
             formatted_images.append(np.asarray(image))
         formatted_images.append(np.asarray(gt.permute(1, 2, 0).cpu()))
         formatted_images = np.concatenate(formatted_images, 1)

@@ -138,7 +138,7 @@ def get_pipeline(
 
     if vae_model_name_or_path is not None:
         print(f"loading vae from {vae_model_name_or_path}")
-        vae = AutoencoderKL.from_pretrained(vae_model_name_or_path, cache_dir=hf_cache_dir, torch_dtype=torch.float16).to(device)
+        vae = AutoencoderKL.from_pretrained(vae_model_name_or_path, cache_dir=hf_cache_dir, torch_dtype=torch.float32).to(device)
         pipeline_init_kwargs["vae"] = vae
 
     if controlnext_model_name_or_path is not None:

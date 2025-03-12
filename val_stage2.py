@@ -74,8 +74,12 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
 
     for i, batch in tqdm.tqdm(enumerate(dataloader), total=len(dataloader)):
         validation_image = batch["source"].to(dtype=weight_dtype)
+        validation_image = (validation_image + 1) / 2.0
         validation_prompt = batch["caption"][0]
         gt = batch["target"].to(dtype=weight_dtype)
+        gt = (gt + 1) / 2.0
+        bg = batch["bg"].to(dtype=weight_dtype)
+        validation_image = validation_image*batch["soft_mask"] + bg*(1-batch["soft_mask"])
         inputs = (batch["source"]*batch["mask"]).to(dtype=weight_dtype)
 
         images = []
@@ -99,6 +103,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
                 prompt=validation_prompt,
                 image=inputs,
                 guidance_scale=1.0,
+                strength=1.0,
                 control_image=control_image,
                 control_image_2=control_image_2,
                 light_image=lighting,
@@ -109,10 +114,11 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
                 negative_prompt=None,
                 width=1024,
                 height=1024,
-                output_type='np',
-            ).images[0]
+                output_type='pt',
+            ).images
+        image = image*batch["soft_mask"] + bg*(1-batch["soft_mask"])
 
-        images.append(image)
+        images.append(image[0])
 
         image_logs.append(
             {"validation_image": validation_image[0], "images": images, "validation_prompt": validation_prompt, "gt": gt[0]}
@@ -127,7 +133,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         formatted_images = []
         formatted_images.append(np.asarray(validation_image.permute(1, 2, 0).cpu()))
         for image in images:
-            formatted_images.append(np.asarray(image))
+            formatted_images.append(np.asarray(image.permute(1, 2, 0).cpu()))
         formatted_images.append(np.asarray(gt.permute(1, 2, 0).cpu()))
         formatted_images = np.concatenate(formatted_images, 1)
 
@@ -251,6 +257,7 @@ def prepare_train_dataset(dataset):
         target = [image_transforms(t) for t in target]
 
         mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
+        soft_mask = [m for m in mask]
         mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
         img_depth = [np.load(depth) for depth in examples['img_depth']]
         bg_depth = [np.load(depth) for depth in examples['bg_depth']]
@@ -260,6 +267,8 @@ def prepare_train_dataset(dataset):
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
 
+        soft_mask = [np.expand_dims(m, axis=-1) for m in soft_mask]
+        soft_mask = [conditioning_image_transforms(m) for m in soft_mask]
 
         img_depth = [np.expand_dims(d, axis=-1) for d in img_depth]
         img_depth = [conditioning_image_transforms(d) for d in img_depth]
@@ -282,6 +291,7 @@ def prepare_train_dataset(dataset):
         examples['source'] = source
         examples['target'] = target
         examples['mask'] = mask
+        examples['soft_mask'] = soft_mask
         examples['depth'] = depth
         examples['lighting'] = lighting
         examples['fg_depth'] = img_depth
@@ -307,6 +317,9 @@ def collate_fn(examples):
     mask = torch.stack([example["mask"] for example in examples])
     mask = mask.to(memory_format=torch.contiguous_format).float()
 
+    soft_mask = torch.stack([example["soft_mask"] for example in examples])
+    soft_mask = soft_mask.to(memory_format=torch.contiguous_format).float()
+
     depth = torch.stack([example["depth"] for example in examples])
     depth = depth.to(memory_format=torch.contiguous_format).float()
 
@@ -328,6 +341,7 @@ def collate_fn(examples):
         "source": source,
         "target": target,
         "mask": mask,
+        "soft_mask": soft_mask,
         "depth": depth,
         "fg_depth": fg_depth,
         "bg_depth": bg_depth,
