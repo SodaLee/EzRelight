@@ -270,6 +270,16 @@ def prepare_train_dataset(dataset, accelerator):
             v2.Normalize([0.5], [0.5]),
         ]
     )
+
+    source_transforms = v2.Compose(
+        [
+            v2.ToTensor(),
+            v2.Resize(args.resolution, interpolation=v2.InterpolationMode.BILINEAR),
+            TopCenterCrop(args.resolution),
+            v2.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+            v2.Normalize([0.5], [0.5]),
+        ]
+    )
     
     conditioning_image_transforms = v2.Compose(
         [
@@ -291,7 +301,8 @@ def prepare_train_dataset(dataset, accelerator):
     def preprocess_train(examples):
         source = [cv2.imread(source, cv2.IMREAD_UNCHANGED) for source in examples['source']]
         source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
-        source = [image_transforms(s) for s in source]
+        # source = [image_transforms(s) for s in source]
+        source = [source_transforms(s) for s in source]
 
         target = [cv2.imread(target, cv2.IMREAD_UNCHANGED) for target in examples['target']]
         target = [cv2.cvtColor(t, cv2.COLOR_BGR2RGB) for t in target]
@@ -307,7 +318,6 @@ def prepare_train_dataset(dataset, accelerator):
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
 
-
         # img_depth = [np.expand_dims(d, axis=-1) for d in img_depth]
         # img_depth = [conditioning_image_transforms(d) for d in img_depth]
         # bg_depth = [np.expand_dims(d, axis=-1) for d in bg_depth]
@@ -322,7 +332,7 @@ def prepare_train_dataset(dataset, accelerator):
 
         bg = [cv2.imread(bg, cv2.IMREAD_UNCHANGED) for bg in examples['bg']]
         bg = [cv2.cvtColor(b, cv2.COLOR_BGR2RGB) for b in bg]
-        bg = [conditioning_image_transforms(b) for b in bg]
+        bg = [image_transforms(b) for b in bg]
 
         # phi = [torch.tensor(phi) for phi in examples['phi']]
 
@@ -872,20 +882,20 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
                 # Convert images to latent space
-                pixel_values = batch["target"]*batch["mask"]
-                latents = vae.encode(pixel_values).latent_dist.sample()
+                pixel_values = batch["target"]
+                latents = vae.encode(pixel_values).latent_dist.mode()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents = latents.to(weight_dtype)
 
                 pixel_values = batch["source"]*batch["mask"]
-                latents_source = vae.encode(pixel_values).latent_dist.sample()
+                latents_source = vae.encode(pixel_values).latent_dist.mode()
                 latents_source = latents_source * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents_source = latents_source.to(weight_dtype)
 
                 bg = batch["bg"]
-                latents_bg = vae.encode(bg).latent_dist.sample()
+                latents_bg = vae.encode(bg).latent_dist.mode()
                 latents_bg = latents_bg * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents_bg = latents_bg.to(weight_dtype)
@@ -992,8 +1002,8 @@ def main(args):
                 mask = batch["mask"].to(accelerator.device, dtype=torch.float32)
                 mask = F.interpolate(mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='bilinear', align_corners=False)
                 
-                # loss_c = consistency_loss_fn(mlp_out, target, mask)
-                loss_c = F.mse_loss(mlp_out.float(), target.float(), reduction="mean")
+                loss_c = consistency_loss_fn(mlp_out, target, mask)
+                # loss_c = F.mse_loss(mlp_out.float(), target.float(), reduction="mean")
 
                 loss = noise_loss + 0.1 * loss_c  #+ 0.01 * depth_loss
 
