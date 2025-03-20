@@ -80,10 +80,10 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         gt = (gt + 1) / 2.0
         bg = batch["bg"].to(dtype=weight_dtype)
         validation_image = validation_image*batch["soft_mask"] + bg*(1-batch["soft_mask"])
-        inputs = (batch["source"]*batch["mask"]).to(dtype=weight_dtype)
+        inputs = (batch["source"]*batch["soft_mask"]).to(dtype=weight_dtype)
 
         images = []
-        control_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
+        control_image = (batch["source"]*batch["soft_mask"]).to(device, dtype=torch.float32)
         control_image_2 = batch["bg"].to(device, dtype=torch.float32)
 
         lighting = batch["lighting"].to(device, dtype=torch.float32)
@@ -95,7 +95,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         # depth = pipeline.depth_fusion(depth)
 
         controlnext_image = depth
-        ref_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
+        ref_image = (batch["source"]*batch["soft_mask"]).to(device, dtype=torch.float32)
         controlnext_image = torch.cat([controlnext_image, ref_image], dim=1)
 
         with inference_ctx:

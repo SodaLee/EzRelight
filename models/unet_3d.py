@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import os
+import json
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint
@@ -165,13 +167,18 @@ class UNet3DConditionModel(
         flip_sin_to_cos: bool = True,
         freq_shift: int = 0,
         down_block_types: Tuple[str] = (
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-            "DownBlock2D",
+            "CrossAttnDownBlock3D",
+            "CrossAttnDownBlock3D",
+            "CrossAttnDownBlock3D",
+            "DownBlock3D",
         ),
-        mid_block_type: Optional[str] = "UNetMidBlock2DCrossAttn",
-        up_block_types: Tuple[str] = ("UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D"),
+        mid_block_type: str = "UNetMidBlock3DCrossAttn",
+        up_block_types: Tuple[str] = (
+            "UpBlock3D",
+            "CrossAttnUpBlock3D",
+            "CrossAttnUpBlock3D",
+            "CrossAttnUpBlock3D"
+        ),
         only_cross_attention: Union[bool, Tuple[bool]] = False,
         block_out_channels: Tuple[int] = (320, 640, 1280, 1280),
         layers_per_block: Union[int, Tuple[int]] = 2,
@@ -211,10 +218,21 @@ class UNet3DConditionModel(
         mid_block_only_cross_attention: Optional[bool] = None,
         cross_attention_norm: Optional[str] = None,
         addition_embed_type_num_heads: int = 64,
+
+        # Additional
+        use_motion_module              = False,
+        motion_module_resolutions      = ( 1,2,4,8 ),
+        motion_module_mid_block        = False,
+        motion_module_decoder_only     = False,
+        motion_module_type             = None,
+        motion_module_kwargs           = {},
+        unet_use_cross_frame_attention = None,
+        unet_use_temporal_attention    = None,
     ):
         super().__init__()
 
         self.sample_size = sample_size
+        time_embed_dim = block_out_channels[0] * 4
 
         if num_attention_heads is not None:
             raise ValueError(
@@ -244,27 +262,13 @@ class UNet3DConditionModel(
         )
 
         # input
-        conv_in_padding = (conv_in_kernel - 1) // 2
-        self.conv_in = nn.Conv2d(
-            in_channels, block_out_channels[0], kernel_size=conv_in_kernel, padding=conv_in_padding
-        )
+        self.conv_in = InflatedConv3d(in_channels, block_out_channels[0], kernel_size=3, padding=(1, 1))
 
         # time
-        time_embed_dim, timestep_input_dim = self._set_time_proj(
-            time_embedding_type,
-            block_out_channels=block_out_channels,
-            flip_sin_to_cos=flip_sin_to_cos,
-            freq_shift=freq_shift,
-            time_embedding_dim=time_embedding_dim,
-        )
+        self.time_proj = Timesteps(block_out_channels[0], flip_sin_to_cos, freq_shift)
+        timestep_input_dim = block_out_channels[0]
 
-        self.time_embedding = TimestepEmbedding(
-            timestep_input_dim,
-            time_embed_dim,
-            act_fn=act_fn,
-            post_act_fn=timestep_post_act,
-            cond_proj_dim=time_cond_proj_dim,
-        )
+        self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
 
         self._set_encoder_hid_proj(
             encoder_hid_dim_type,
@@ -1215,9 +1219,6 @@ class UNet3DConditionModel(
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
-                    cross_attention_kwargs=cross_attention_kwargs,
-                    encoder_attention_mask=encoder_attention_mask,
-                    **additional_residuals,
                 )
             else:
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
@@ -1245,8 +1246,6 @@ class UNet3DConditionModel(
                     emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
-                    cross_attention_kwargs=cross_attention_kwargs,
-                    encoder_attention_mask=encoder_attention_mask,
                 )
             else:
                 sample = self.mid_block(sample, emb)
@@ -1280,10 +1279,8 @@ class UNet3DConditionModel(
                     temb=emb,
                     res_hidden_states_tuple=res_samples,
                     encoder_hidden_states=encoder_hidden_states,
-                    cross_attention_kwargs=cross_attention_kwargs,
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
-                    encoder_attention_mask=encoder_attention_mask,
                 )
             else:
                 sample = upsample_block(
@@ -1332,7 +1329,7 @@ class UNet3DConditionModel(
             "CrossAttnUpBlock3D",
             "CrossAttnUpBlock3D"
         ]
-        # config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
+        config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
 
         from diffusers.utils import WEIGHTS_NAME
         model = cls.from_config(config, **unet_additional_kwargs)
