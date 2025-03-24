@@ -41,6 +41,7 @@ from .unet_3d_blocks import (
     get_up_block,
 )
 from .resnet import InflatedConv3d
+from einops import rearrange
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -405,6 +406,7 @@ class UNet3DConditionModel(
 
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
+        reversed_attention_head_dim = list(reversed(attention_head_dim))
         reversed_num_attention_heads = list(reversed(num_attention_heads))
         reversed_layers_per_block = list(reversed(layers_per_block))
         reversed_cross_attention_dim = list(reversed(cross_attention_dim))
@@ -417,6 +419,7 @@ class UNet3DConditionModel(
 
         output_channel = reversed_block_out_channels[0]
         for i, up_block_type in enumerate(up_block_types):
+            res = 2 ** (3 - i)
             is_final_block = i == len(block_out_channels) - 1
 
             prev_output_channel = output_channel
@@ -432,30 +435,29 @@ class UNet3DConditionModel(
 
             up_block = get_up_block(
                 up_block_type,
-                num_layers=reversed_layers_per_block[i] + 1,
-                transformer_layers_per_block=reversed_transformer_layers_per_block[i],
+                num_layers=layers_per_block + 1,
                 in_channels=input_channel,
                 out_channels=output_channel,
                 prev_output_channel=prev_output_channel,
-                temb_channels=blocks_time_embed_dim,
+                temb_channels=time_embed_dim,
                 add_upsample=add_upsample,
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
-                resolution_idx=i,
                 resnet_groups=norm_num_groups,
-                cross_attention_dim=reversed_cross_attention_dim[i],
-                num_attention_heads=reversed_num_attention_heads[i],
+                cross_attention_dim=cross_attention_dim,
+                attn_num_head_channels=reversed_attention_head_dim[i],
                 dual_cross_attention=dual_cross_attention,
                 use_linear_projection=use_linear_projection,
                 only_cross_attention=only_cross_attention[i],
                 upcast_attention=upcast_attention,
                 resnet_time_scale_shift=resnet_time_scale_shift,
-                attention_type=attention_type,
-                resnet_skip_time_act=resnet_skip_time_act,
-                resnet_out_scale_factor=resnet_out_scale_factor,
-                cross_attention_norm=cross_attention_norm,
-                attention_head_dim=attention_head_dim[i] if attention_head_dim[i] is not None else output_channel,
-                dropout=dropout,
+
+                unet_use_cross_frame_attention=unet_use_cross_frame_attention,
+                unet_use_temporal_attention=unet_use_temporal_attention,
+
+                use_motion_module=use_motion_module and (res in motion_module_resolutions),
+                motion_module_type=motion_module_type,
+                motion_module_kwargs=motion_module_kwargs,
             )
             self.up_blocks.append(up_block)
             prev_output_channel = output_channel
@@ -1205,7 +1207,10 @@ class UNet3DConditionModel(
             mean_control, std_control = torch.mean(controls, dim=(1, 2, 3), keepdim=True), torch.std(controls, dim=(1, 2, 3), keepdim=True)
             controls = (controls - mean_control) * (std_latents / (std_control + 1e-12)) + mean_latents
             controls = nn.functional.adaptive_avg_pool2d(controls, sample.shape[-2:])
+            video_length = sample.shape[1]
+            sample = rearrange(sample, "b c f h w -> (b f) c h w")
             sample = sample + controls * scale
+            sample = rearrange(sample, "(b f) c h w -> b c f h w", f=video_length)
 
         for i, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
@@ -1329,7 +1334,51 @@ class UNet3DConditionModel(
             "CrossAttnUpBlock3D",
             "CrossAttnUpBlock3D"
         ]
-        config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
+        # config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
+
+        # unet_additional_kwargs:
+        # unet_use_cross_frame_attention: false
+        # unet_use_temporal_attention: false
+        # use_motion_module: true
+        # motion_module_resolutions:
+        # - 1
+        # - 2
+        # - 4
+        # - 8
+        # motion_module_mid_block: false
+        # motion_module_decoder_only: false
+        # motion_module_type: Vanilla
+        # motion_module_kwargs:
+        #     num_attention_heads: 8
+        #     num_transformer_block: 1
+        #     attention_block_types:
+        #     - Temporal_Self
+        #     - Temporal_Self
+        #     temporal_position_encoding: true
+        #     temporal_position_encoding_max_len: 24
+        #     temporal_attention_dim_div: 1
+
+        # use_motion_module              = False,
+        # motion_module_resolutions      = ( 1,2,4,8 ),
+        # motion_module_mid_block        = False,
+        # motion_module_decoder_only     = False,
+        # motion_module_type             = None,
+        # motion_module_kwargs           = {},
+        # unet_use_cross_frame_attention = None,
+        # unet_use_temporal_attention    = None,
+
+        config['use_motion_module'] = True
+        config['motion_module_type'] = "Vanilla"
+        config['motion_module_kwargs'] = {
+            "num_attention_heads": 8,
+            "num_transformer_block": 1,
+            "attention_block_types": ["Temporal_Self", "Temporal_Self"],
+            "temporal_position_encoding": True,
+            "temporal_position_encoding_max_len": 24,
+            "temporal_attention_dim_div": 1
+        }
+        config['unet_use_cross_frame_attention'] = False
+        config['unet_use_temporal_attention'] = False
 
         from diffusers.utils import WEIGHTS_NAME
         model = cls.from_config(config, **unet_additional_kwargs)

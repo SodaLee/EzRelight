@@ -22,6 +22,8 @@ for j in range(1, 341):
     video_dir = os.path.join(dataset_root, '%05d' % j)
     image_dir = os.path.join(video_dir, 'images')
     video_len = len(os.listdir(image_dir))
+    if os.path.exists(os.path.join(video_dir, 'captions.txt')):
+        continue
 
     for i in range(1, video_len+1):
         image_path = os.path.join(image_dir, '%04d.png' % i)

@@ -464,6 +464,12 @@ class ControlNetModel(ModelMixin, ConfigMixin):
         elif len(timesteps.shape) == 0:
             timesteps = timesteps[None].to(sample.device)
 
+        if len(sample.shape) == 5:
+            B, C, F, H, W = sample.shape
+            sample = rearrange(sample, "b c f h w -> (b f) c h w")
+        else:
+            B, C, H, W = sample.shape
+            F = 1
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
         batch_size = sample.shape[0]
         timesteps = timesteps.expand(batch_size)
@@ -476,6 +482,8 @@ class ControlNetModel(ModelMixin, ConfigMixin):
 
         # Repeat the embeddings num_video_frames times
         # emb: [batch, channels] -> [batch * frames, channels]
+        if F > 1:
+            emb_batch = emb_batch.repeat_interleave(F, dim=0)
         emb = emb_batch
         sample = self.embedding(sample)
         for res, downsample in zip(self.down_res, self.down_sample):
