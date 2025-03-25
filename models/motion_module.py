@@ -98,7 +98,7 @@ class TemporalTransformer3DModel(nn.Module):
         attention_block_types              = ( "Temporal_Self", "Temporal_Self", ),        
         dropout                            = 0.0,
         norm_num_groups                    = 32,
-        cross_attention_dim                = 768,
+        cross_attention_dim                = 320,
         activation_fn                      = "geglu",
         attention_bias                     = False,
         upcast_attention                   = False,
@@ -283,6 +283,10 @@ class VersatileAttention(CrossAttention):
                 hidden_states = self.pos_encoder(hidden_states)
             
             encoder_hidden_states = repeat(encoder_hidden_states, "b n c -> (b d) n c", d=d) if encoder_hidden_states is not None else encoder_hidden_states
+        elif self.attention_mode == "Depth":
+            d = hidden_states.shape[1]
+            hidden_states = hidden_states
+            encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else encoder_hidden_states
         else:
             raise NotImplementedError
 

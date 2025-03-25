@@ -1211,6 +1211,9 @@ class UNet3DConditionModel(
             sample = rearrange(sample, "b c f h w -> (b f) c h w")
             sample = sample + controls * scale
             sample = rearrange(sample, "(b f) c h w -> b c f h w", f=video_length)
+            # use for cross attention
+            depth_control = nn.functional.adaptive_avg_pool2d(controls, (8, 8))
+            depth_control = rearrange(controls, "b c h w -> b (h w) c")
 
         for i, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
@@ -1311,7 +1314,7 @@ class UNet3DConditionModel(
         return UNet3DConditionOutput(sample=sample)
     
     @classmethod
-    def from_pretrained_2d(cls, pretrained_model_path, subfolder=None, unet_additional_kwargs=None):
+    def from_pretrained_2d(cls, pretrained_model_path, last_model_path, subfolder=None, unet_additional_kwargs=None):
         if subfolder is not None:
             pretrained_model_path = os.path.join(pretrained_model_path, subfolder)
         print(f"loaded temporal unet's pretrained weights from {pretrained_model_path} ...")
@@ -1323,73 +1326,55 @@ class UNet3DConditionModel(
             config = json.load(f)
         config["_class_name"] = cls.__name__
         config["down_block_types"] = [
+            "DownBlock3D",
             "CrossAttnDownBlock3D",
             "CrossAttnDownBlock3D",
-            "CrossAttnDownBlock3D",
-            "DownBlock3D"
         ]
         config["up_block_types"] = [
+            "CrossAttnUpBlock3D",
+            "CrossAttnUpBlock3D",
             "UpBlock3D",
-            "CrossAttnUpBlock3D",
-            "CrossAttnUpBlock3D",
-            "CrossAttnUpBlock3D"
         ]
         # config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
-
-        # unet_additional_kwargs:
-        # unet_use_cross_frame_attention: false
-        # unet_use_temporal_attention: false
-        # use_motion_module: true
-        # motion_module_resolutions:
-        # - 1
-        # - 2
-        # - 4
-        # - 8
-        # motion_module_mid_block: false
-        # motion_module_decoder_only: false
-        # motion_module_type: Vanilla
-        # motion_module_kwargs:
-        #     num_attention_heads: 8
-        #     num_transformer_block: 1
-        #     attention_block_types:
-        #     - Temporal_Self
-        #     - Temporal_Self
-        #     temporal_position_encoding: true
-        #     temporal_position_encoding_max_len: 24
-        #     temporal_attention_dim_div: 1
-
-        # use_motion_module              = False,
-        # motion_module_resolutions      = ( 1,2,4,8 ),
-        # motion_module_mid_block        = False,
-        # motion_module_decoder_only     = False,
-        # motion_module_type             = None,
-        # motion_module_kwargs           = {},
-        # unet_use_cross_frame_attention = None,
-        # unet_use_temporal_attention    = None,
 
         config['use_motion_module'] = True
         config['motion_module_type'] = "Vanilla"
         config['motion_module_kwargs'] = {
             "num_attention_heads": 8,
             "num_transformer_block": 1,
-            "attention_block_types": ["Temporal_Self", "Temporal_Self"],
+            "attention_block_types": ["Depth_Cross", "Temporal_Self"],
             "temporal_position_encoding": True,
             "temporal_position_encoding_max_len": 24,
             "temporal_attention_dim_div": 1
         }
         config['unet_use_cross_frame_attention'] = False
         config['unet_use_temporal_attention'] = False
+        config['in_channels'] = 12
 
-        from diffusers.utils import WEIGHTS_NAME
+        # from diffusers.utils import WEIGHTS_NAME
+        from safetensors.torch import load_file
         model = cls.from_config(config, **unet_additional_kwargs)
-        model_file = os.path.join(pretrained_model_path, WEIGHTS_NAME)
+        model_file = os.path.join(pretrained_model_path, 'diffusion_pytorch_model.fp16.safetensors')
         if not os.path.isfile(model_file):
             raise RuntimeError(f"{model_file} does not exist")
-        state_dict = torch.load(model_file, map_location="cpu")
+        # state_dict = torch.load(model_file, map_location="cpu")
+        state_dict = load_file(model_file)
+        extra_save = ["conv_in.weight", "conv_in.bias"]
+        # delete extra keys
+        for key in extra_save:
+            if key in state_dict:
+                del state_dict[key]
 
         m, u = model.load_state_dict(state_dict, strict=False)
         print(f"### missing keys: {len(m)}; \n### unexpected keys: {len(u)};")
         # print(f"### missing keys:\n{m}\n### unexpected keys:\n{u}\n")
+
+        last_model_file = os.path.join(last_model_path)
+        if not os.path.isfile(last_model_file):
+            raise RuntimeError(f"{last_model_file} does not exist")
+        last_state_dict = load_file(last_model_file)
+        model.load_state_dict(last_state_dict, strict=False)
+        print(f"### loaded last model from {last_model_file}")
         
         params = [p.numel() if "temporal" in n else 0 for n, p in model.named_parameters()]
         print(f"### Temporal Module Parameters: {sum(params) / 1e6} M")
