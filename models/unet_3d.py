@@ -1227,9 +1227,10 @@ class UNet3DConditionModel(
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
+                    depth_control=depth_control,
                 )
             else:
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
+                sample, res_samples = downsample_block(hidden_states=sample, temb=emb, encoder_hidden_states=encoder_hidden_states, depth_control=depth_control)
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
                     sample += down_intrablock_additional_residuals.pop(0)
 
@@ -1254,9 +1255,10 @@ class UNet3DConditionModel(
                     emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
+                    depth_control=depth_control,
                 )
             else:
-                sample = self.mid_block(sample, emb)
+                sample = self.mid_block(sample, emb, depth_control=depth_control)
 
             # To support T2I-Adapter-XL
             if (
@@ -1289,6 +1291,7 @@ class UNet3DConditionModel(
                     encoder_hidden_states=encoder_hidden_states,
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
+                    depth_control=depth_control,
                 )
             else:
                 sample = upsample_block(
@@ -1296,6 +1299,7 @@ class UNet3DConditionModel(
                     temb=emb,
                     res_hidden_states_tuple=res_samples,
                     upsample_size=upsample_size,
+                    depth_control=depth_control,
                 )
 
         # 6. post-process
