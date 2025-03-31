@@ -1,0 +1,24 @@
+CUDA_VISIBLE_DEVICES="4" \
+accelerate launch train_video.py \
+--pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
+--pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
+--variant fp16 \
+--use_safetensors \
+--output_dir "/data2/lihaochen/EzRelight_chps/video/try_0331" \
+--logging_dir "logs" \
+--resolution 1024 \
+--gradient_checkpointing \
+--set_grads_to_none \
+--proportion_empty_prompts 0.2 \
+--controlnet_scale_factor 1.0 \
+--num_train_epochs 1 \
+--train_batch_size 4 \
+--mixed_precision fp16 \
+--checkpointing_steps 2000 \
+--enable_xformers_memory_efficient_attention \
+--dataset_name "/data/lihaochen/projects/EzRelight" \
+--data_files "video_train.parquet" \
+--cache_dir "/data3/lihaochen/BGRelight/video_cache" \
+--caption_column "caption" \
+--lr_scheduler "polynomial" --lr_power 0.98 \
+--stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage2/try_0312/checkpoints/final"

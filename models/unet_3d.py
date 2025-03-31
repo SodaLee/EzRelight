@@ -349,7 +349,8 @@ class UNet3DConditionModel(
 
             down_block = get_down_block(
                 down_block_type,
-                num_layers=layers_per_block,
+                num_layers=layers_per_block[i],
+                transformer_layers_per_block=transformer_layers_per_block[i],
                 in_channels=input_channel,
                 out_channels=output_channel,
                 temb_channels=time_embed_dim,
@@ -357,7 +358,7 @@ class UNet3DConditionModel(
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
-                cross_attention_dim=cross_attention_dim,
+                cross_attention_dim=cross_attention_dim[i],
                 attn_num_head_channels=attention_head_dim[i],
                 downsample_padding=downsample_padding,
                 dual_cross_attention=dual_cross_attention,
@@ -383,8 +384,9 @@ class UNet3DConditionModel(
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
                 output_scale_factor=mid_block_scale_factor,
+                transformer_layers_per_block=transformer_layers_per_block[-1],
                 resnet_time_scale_shift=resnet_time_scale_shift,
-                cross_attention_dim=cross_attention_dim,
+                cross_attention_dim=cross_attention_dim[-1],
                 attn_num_head_channels=attention_head_dim[-1],
                 resnet_groups=norm_num_groups,
                 dual_cross_attention=dual_cross_attention,
@@ -435,7 +437,8 @@ class UNet3DConditionModel(
 
             up_block = get_up_block(
                 up_block_type,
-                num_layers=layers_per_block + 1,
+                num_layers=reversed_layers_per_block[i] + 1,
+                transformer_layers_per_block=reversed_transformer_layers_per_block[i],
                 in_channels=input_channel,
                 out_channels=output_channel,
                 prev_output_channel=prev_output_channel,
@@ -444,7 +447,7 @@ class UNet3DConditionModel(
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
-                cross_attention_dim=cross_attention_dim,
+                cross_attention_dim=reversed_cross_attention_dim[i],
                 attn_num_head_channels=reversed_attention_head_dim[i],
                 dual_cross_attention=dual_cross_attention,
                 use_linear_projection=use_linear_projection,
@@ -1339,7 +1342,7 @@ class UNet3DConditionModel(
             "CrossAttnUpBlock3D",
             "UpBlock3D",
         ]
-        # config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
+        config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
 
         config['use_motion_module'] = True
         config['motion_module_type'] = "Vanilla"
@@ -1357,7 +1360,7 @@ class UNet3DConditionModel(
 
         # from diffusers.utils import WEIGHTS_NAME
         from safetensors.torch import load_file
-        model = cls.from_config(config, **unet_additional_kwargs)
+        model = cls.from_config(config)
         model_file = os.path.join(pretrained_model_path, 'diffusion_pytorch_model.fp16.safetensors')
         if not os.path.isfile(model_file):
             raise RuntimeError(f"{model_file} does not exist")
@@ -1377,7 +1380,8 @@ class UNet3DConditionModel(
         if not os.path.isfile(last_model_file):
             raise RuntimeError(f"{last_model_file} does not exist")
         last_state_dict = load_file(last_model_file)
-        model.load_state_dict(last_state_dict, strict=False)
+        m, u = model.load_state_dict(last_state_dict, strict=False)
+        # print(f"### missing keys:\n{m}\n### unexpected keys:\n{u}\n")
         print(f"### loaded last model from {last_model_file}")
         
         params = [p.numel() if "temporal" in n else 0 for n, p in model.named_parameters()]

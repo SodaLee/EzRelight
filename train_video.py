@@ -63,7 +63,8 @@ from diffusers.utils.torch_utils import is_compiled_module
 from safetensors.torch import load_file, save_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
 from models.controlnext import ControlNetModel as ControlNext
-from models.unet import UNet2DConditionModel
+# from models.unet import UNet2DConditionModel
+from models.unet_3d import UNet3DConditionModel
 from models.lightenc import LightEnc, MLP5, DepthFusion
 from args import parse_args
 
@@ -505,40 +506,11 @@ def main(args):
         revision=args.revision if args.pretrained_vae_model_name_or_path is None else None,
         variant=args.variant if args.pretrained_vae_model_name_or_path is None else None,
     )
-    unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant, use_safetensors=args.use_safetensors,
+
+    unet = UNet3DConditionModel.from_pretrained_2d(
+        "/data2/lihaochen/models/stable-diffusion-xl-base-1.0/unet", last_model_path=args.pretrained_unet_model_name_or_path,
     )
-
-    # if args.load_weights_increaments or args.save_weights_increaments:
-    import copy
-    orig_unet_sd = copy.deepcopy(unet.state_dict())
-
-    new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
-    torch.nn.init.zeros_(new_conv_in.weight)
-    new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
-    new_conv_in.bias.data = unet.conv_in.bias.data
-    unet.conv_in = new_conv_in
-
-    if args.pretrained_unet_model_name_or_path:
-        logger.info("Loading existing unet weights")
-        unet_sd = load_file(args.pretrained_unet_model_name_or_path)
-        if args.load_weights_increaments:
-            logger.info("Loading unet weights in increaments")
-            for k in orig_unet_sd.keys():
-                if k in unet_sd:
-                    unet_sd[k] += orig_unet_sd[k]
-                else:
-                    unet_sd[k] = orig_unet_sd[k]
-        else:
-            logger.info("Loading unet weights")
-            for k in orig_unet_sd.keys():
-                if k not in unet_sd:
-                    unet_sd[k] = orig_unet_sd[k]
-        unet.load_state_dict(unet_sd)
-    else:
-        logger.info("Initializing unet weights from scratch")
-        pass
-
+    return
     controlnext = ControlNext()
     if args.controlnext_model_name_or_path:
         logger.info("Loading existing controlnext weights")

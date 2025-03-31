@@ -36,6 +36,7 @@ def get_down_block(
     add_downsample,
     resnet_eps,
     resnet_act_fn,
+    transformer_layers_per_block,
     attn_num_head_channels,
     resnet_groups=None,
     cross_attention_dim=None,
@@ -77,6 +78,7 @@ def get_down_block(
             raise ValueError("cross_attention_dim must be specified for CrossAttnDownBlock3D")
         return CrossAttnDownBlock3D(
             num_layers=num_layers,
+            transformer_layers_per_block=transformer_layers_per_block,
             in_channels=in_channels,
             out_channels=out_channels,
             temb_channels=temb_channels,
@@ -113,6 +115,7 @@ def get_up_block(
     add_upsample,
     resnet_eps,
     resnet_act_fn,
+    transformer_layers_per_block,
     attn_num_head_channels,
     resnet_groups=None,
     cross_attention_dim=None,
@@ -152,6 +155,7 @@ def get_up_block(
             raise ValueError("cross_attention_dim must be specified for CrossAttnUpBlock3D")
         return CrossAttnUpBlock3D(
             num_layers=num_layers,
+            transformer_layers_per_block=transformer_layers_per_block,
             in_channels=in_channels,
             out_channels=out_channels,
             prev_output_channel=prev_output_channel,
@@ -185,6 +189,7 @@ class UNetMidBlock3DCrossAttn(nn.Module):
         temb_channels: int,
         dropout: float = 0.0,
         num_layers: int = 1,
+        transformer_layers_per_block: int = 1,
         resnet_eps: float = 1e-6,
         resnet_time_scale_shift: str = "default",
         resnet_act_fn: str = "swish",
@@ -211,6 +216,9 @@ class UNetMidBlock3DCrossAttn(nn.Module):
         self.attn_num_head_channels = attn_num_head_channels
         resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
 
+        if isinstance(transformer_layers_per_block, int):
+            transformer_layers_per_block = [transformer_layers_per_block] * num_layers
+
         # there is always at least one resnet
         resnets = [
             ResnetBlock3D(
@@ -229,7 +237,7 @@ class UNetMidBlock3DCrossAttn(nn.Module):
         attentions = []
         motion_modules = []
 
-        for _ in range(num_layers):
+        for i in range(num_layers):
             if dual_cross_attention:
                 raise NotImplementedError
             attentions.append(
@@ -237,7 +245,7 @@ class UNetMidBlock3DCrossAttn(nn.Module):
                     attn_num_head_channels,
                     in_channels // attn_num_head_channels,
                     in_channels=in_channels,
-                    num_layers=1,
+                    num_layers=transformer_layers_per_block[i],
                     cross_attention_dim=cross_attention_dim,
                     norm_num_groups=resnet_groups,
                     use_linear_projection=use_linear_projection,
@@ -291,6 +299,7 @@ class CrossAttnDownBlock3D(nn.Module):
         temb_channels: int,
         dropout: float = 0.0,
         num_layers: int = 1,
+        transformer_layers_per_block: int = 1,
         resnet_eps: float = 1e-6,
         resnet_time_scale_shift: str = "default",
         resnet_act_fn: str = "swish",
@@ -321,6 +330,8 @@ class CrossAttnDownBlock3D(nn.Module):
 
         self.has_cross_attention = True
         self.attn_num_head_channels = attn_num_head_channels
+        if isinstance(transformer_layers_per_block, int):
+            transformer_layers_per_block = [transformer_layers_per_block] * num_layers
 
         for i in range(num_layers):
             in_channels = in_channels if i == 0 else out_channels
@@ -345,7 +356,7 @@ class CrossAttnDownBlock3D(nn.Module):
                     attn_num_head_channels,
                     out_channels // attn_num_head_channels,
                     in_channels=out_channels,
-                    num_layers=1,
+                    num_layers=transformer_layers_per_block[i],
                     cross_attention_dim=cross_attention_dim,
                     norm_num_groups=resnet_groups,
                     use_linear_projection=use_linear_projection,
@@ -528,6 +539,7 @@ class CrossAttnUpBlock3D(nn.Module):
         temb_channels: int,
         dropout: float = 0.0,
         num_layers: int = 1,
+        transformer_layers_per_block: int = 1,
         resnet_eps: float = 1e-6,
         resnet_time_scale_shift: str = "default",
         resnet_act_fn: str = "swish",
@@ -558,6 +570,9 @@ class CrossAttnUpBlock3D(nn.Module):
         self.has_cross_attention = True
         self.attn_num_head_channels = attn_num_head_channels
 
+        if isinstance(transformer_layers_per_block, int):
+            transformer_layers_per_block = [transformer_layers_per_block] * num_layers
+
         for i in range(num_layers):
             res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
             resnet_in_channels = prev_output_channel if i == 0 else out_channels
@@ -583,7 +598,7 @@ class CrossAttnUpBlock3D(nn.Module):
                     attn_num_head_channels,
                     out_channels // attn_num_head_channels,
                     in_channels=out_channels,
-                    num_layers=1,
+                    num_layers=transformer_layers_per_block[i],
                     cross_attention_dim=cross_attention_dim,
                     norm_num_groups=resnet_groups,
                     use_linear_projection=use_linear_projection,

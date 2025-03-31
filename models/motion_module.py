@@ -258,7 +258,7 @@ class VersatileAttention(CrossAttention):
             *args, **kwargs
         ):
         super().__init__(*args, **kwargs)
-        assert attention_mode == "Temporal"
+        assert attention_mode == "Temporal" or attention_mode == "Depth", f"Attention mode {attention_mode} not supported."
 
         self.attention_mode = attention_mode
         self.is_cross_attention = kwargs["cross_attention_dim"] is not None
