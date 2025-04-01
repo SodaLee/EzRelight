@@ -478,9 +478,7 @@ class UNet3DConditionModel(
             self.conv_act = None
 
         conv_out_padding = (conv_out_kernel - 1) // 2
-        self.conv_out = nn.Conv2d(
-            block_out_channels[0], out_channels, kernel_size=conv_out_kernel, padding=conv_out_padding
-        )
+        self.conv_out = InflatedConv3d(block_out_channels[0], out_channels, kernel_size=3, padding=1)
 
         self._set_pos_net_if_use_gligen(attention_type=attention_type, cross_attention_dim=cross_attention_dim)
 
@@ -1204,19 +1202,19 @@ class UNet3DConditionModel(
         down_block_res_samples = (sample,)
 
         if is_controlnext:
+            video_length = sample.shape[2]
+            sample = rearrange(sample, "b c f h w -> (b f) c h w")
             scale = controls['scale']
             controls = controls['out'].to(sample)
             mean_latents, std_latents = torch.mean(sample, dim=(1, 2, 3), keepdim=True), torch.std(sample, dim=(1, 2, 3), keepdim=True)
             mean_control, std_control = torch.mean(controls, dim=(1, 2, 3), keepdim=True), torch.std(controls, dim=(1, 2, 3), keepdim=True)
             controls = (controls - mean_control) * (std_latents / (std_control + 1e-12)) + mean_latents
             controls = nn.functional.adaptive_avg_pool2d(controls, sample.shape[-2:])
-            video_length = sample.shape[1]
-            sample = rearrange(sample, "b c f h w -> (b f) c h w")
             sample = sample + controls * scale
-            sample = rearrange(sample, "(b f) c h w -> b c f h w", f=video_length)
             # use for cross attention
             depth_control = nn.functional.adaptive_avg_pool2d(controls, (8, 8))
-            depth_control = rearrange(controls, "b c h w -> b (h w) c")
+            depth_control = rearrange(depth_control, "b c h w -> b (h w) c")
+            sample = rearrange(sample, "(b f) c h w -> b c f h w", f=video_length)
 
         for i, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:

@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES="4" \
+CUDA_VISIBLE_DEVICES="0,1,2,3" \
 accelerate launch train_video.py \
 --pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
@@ -12,7 +12,7 @@ accelerate launch train_video.py \
 --proportion_empty_prompts 0.2 \
 --controlnet_scale_factor 1.0 \
 --num_train_epochs 1 \
---train_batch_size 4 \
+--train_batch_size 1 \
 --mixed_precision fp16 \
 --checkpointing_steps 2000 \
 --enable_xformers_memory_efficient_attention \

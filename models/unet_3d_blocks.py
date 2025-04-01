@@ -414,7 +414,7 @@ class CrossAttnDownBlock3D(nn.Module):
                     encoder_hidden_states,
                 )[0]
                 if motion_module is not None:
-                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, encoder_hidden_states)
+                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control)
                 
             else:
                 hidden_states = resnet(hidden_states, temb)
@@ -512,7 +512,7 @@ class DownBlock3D(nn.Module):
 
                 hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(resnet), hidden_states, temb)
                 if motion_module is not None:
-                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, encoder_hidden_states)
+                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control)
             else:
                 hidden_states = resnet(hidden_states, temb)
 
@@ -662,7 +662,7 @@ class CrossAttnUpBlock3D(nn.Module):
                     encoder_hidden_states,
                 )[0]
                 if motion_module is not None:
-                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, encoder_hidden_states)
+                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control)
             
             else:
                 hidden_states = resnet(hidden_states, temb)
@@ -755,7 +755,7 @@ class UpBlock3D(nn.Module):
 
                 hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(resnet), hidden_states, temb)
                 if motion_module is not None:
-                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, encoder_hidden_states)
+                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control)
             else:
                 hidden_states = resnet(hidden_states, temb)
                 hidden_states = motion_module(hidden_states, temb, encoder_hidden_states=depth_control) if motion_module is not None else hidden_states

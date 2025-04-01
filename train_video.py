@@ -25,6 +25,7 @@ import math
 import os
 import random
 import shutil
+from einops import rearrange, repeat
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -299,59 +300,141 @@ def prepare_train_dataset(dataset, accelerator):
         ]
     )
 
+    def adjust_and_fuse_depth(foreground_depth, background_depth, foreground_mask, bottom_rows=5):
+        """
+        将前景深度图与背景深度图融合，确保前景物体（如人）的脚部深度与背景一致。
+
+        参数:
+            foreground_depth (np.ndarray): 前景深度图。
+            background_depth (np.ndarray): 背景深度图。
+            foreground_mask (np.ndarray): 前景掩码，1表示前景，0表示背景。
+            bottom_rows (int): 取前景物体底部的行数，默认为5。
+
+        返回:
+            np.ndarray: 融合后的深度图。
+        """
+        # 确保输入数组的尺寸一致
+        assert foreground_depth.shape == background_depth.shape == foreground_mask.shape, "输入数组的尺寸必须一致"
+        
+        # 找到前景物体的底部区域（取底部多行）
+        bottom_mask = np.zeros_like(foreground_mask, dtype=bool)
+        rows, cols = np.where(foreground_mask == 1)  # 找到所有前景像素的行和列
+        if len(rows) == 0:
+            return background_depth  # 如果没有前景物体，直接返回背景深度图
+        
+        # 找到每一列的前景物体的最底部行
+        unique_cols = np.unique(cols)  # 所有有前景物体的列
+        for col in unique_cols:
+            col_rows = rows[cols == col]  # 当前列的所有前景行
+            if len(col_rows) > 0:
+                bottom_row = np.max(col_rows)  # 当前列的最底部行
+                # 取底部多行
+                bottom_mask[col_rows[col_rows >= (bottom_row - bottom_rows + 1)], col] = True
+        
+        # 计算前景物体底部的平均深度
+        foreground_bottom_depth = np.mean(foreground_depth[bottom_mask])
+        
+        # 计算背景对应区域的平均深度
+        background_bottom_depth = np.mean(background_depth[bottom_mask])
+        
+        # 计算深度差异
+        depth_diff = background_bottom_depth - foreground_bottom_depth
+        
+        # 调整前景物体的深度值
+        adjusted_foreground_depth = foreground_depth.copy()
+        adjusted_foreground_depth[foreground_mask == 1] += depth_diff
+        
+        # 将调整后的前景深度信息融合到背景深度图中
+        fused_depth = background_depth.copy()
+        fused_depth[foreground_mask == 1] = adjusted_foreground_depth[foreground_mask == 1]
+        
+        return fused_depth
+
     def preprocess_train(examples):
-        source = [cv2.imread(source, cv2.IMREAD_UNCHANGED) for source in examples['source']]
+        f = len(examples['source'])
+        bs = len(examples['source'][0])
+
+        source = []
+        for sources in examples['source']:
+            for s in sources:
+                source.append(cv2.imread(s, cv2.IMREAD_UNCHANGED))
         source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
-        # source = [image_transforms(s) for s in source]
         source = [source_transforms(s) for s in source]
 
-        target = [cv2.imread(target, cv2.IMREAD_UNCHANGED) for target in examples['target']]
+        target = []
+        for targets in examples['target']:
+            for t in targets:
+                target.append(cv2.imread(t, cv2.IMREAD_UNCHANGED))
         target = [cv2.cvtColor(t, cv2.COLOR_BGR2RGB) for t in target]
         target = [image_transforms(t) for t in target]
 
-        mask = [cv2.imread(mask, cv2.IMREAD_UNCHANGED) for mask in examples['mask']]
-        # mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
-        # img_depth = [np.load(depth) for depth in examples['img_depth']]
-        # bg_depth = [np.load(depth) for depth in examples['bg_depth']]
-        # depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
-        depth = [np.load(depth) for depth in examples['fused_depth']]
+        mask = []
+        for masks in examples['mask']:
+            for m in masks:
+                mask.append(cv2.imread(m, cv2.IMREAD_UNCHANGED))
+
+        img_depth = []
+        for img_depths in examples['img_depth']:
+            for d in img_depths:
+                img_depth.append(np.load(d))
+
+        bg_depth = []
+        for bg_depths in examples['bg_depth']:
+            for d in bg_depths:
+                bg_depth.append(np.load(d))
+
+        depth = [adjust_and_fuse_depth(img, bg, m) for img, bg, m in zip(img_depth, bg_depth, mask)]
         
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
 
-        # img_depth = [np.expand_dims(d, axis=-1) for d in img_depth]
-        # img_depth = [conditioning_image_transforms(d) for d in img_depth]
-        # bg_depth = [np.expand_dims(d, axis=-1) for d in bg_depth]
-        # bg_depth = [conditioning_image_transforms(d) for d in bg_depth]
         depth = [np.expand_dims(d, axis=-1) for d in depth]
         depth = [conditioning_image_transforms(d) for d in depth]
 
-        lighting = [cv2.imread(lighting, cv2.IMREAD_UNCHANGED) for lighting in examples['lighting']]
+        lighting = []
+        for lightings in examples['lighting']:
+            for l in lightings:
+                lighting.append(cv2.imread(l, cv2.IMREAD_UNCHANGED))
         lighting = [cv2.cvtColor(l, cv2.COLOR_BGR2RGB) for l in lighting]
         lighting = [np.roll(l, l.shape[1] // 2, 1) for l in lighting]
         lighting = [bg_image_transforms(l) for l in lighting]
 
-        bg = [cv2.imread(bg, cv2.IMREAD_UNCHANGED) for bg in examples['bg']]
+        bg = []
+        for bgs in examples['bg']:
+            for b in bgs:
+                bg.append(cv2.imread(b, cv2.IMREAD_UNCHANGED))
         bg = [cv2.cvtColor(b, cv2.COLOR_BGR2RGB) for b in bg]
         bg = [image_transforms(b) for b in bg]
 
-        # phi = [torch.tensor(phi) for phi in examples['phi']]
+        # group by batch size
+        source = [source[i:i+bs] for i in range(0, len(source), bs)]
+        target = [target[i:i+bs] for i in range(0, len(target), bs)]
+        mask = [mask[i:i+bs] for i in range(0, len(mask), bs)]
+        depth = [depth[i:i+bs] for i in range(0, len(depth), bs)]
+        lighting = [lighting[i:i+bs] for i in range(0, len(lighting), bs)]
+        bg = [bg[i:i+bs] for i in range(0, len(bg), bs)]
+
+        # stack along dim 1
+        source = [torch.stack(s, dim=1) for s in source]
+        target = [torch.stack(t, dim=1) for t in target]
+        mask = [torch.stack(m, dim=1) for m in mask]
+        depth = [torch.stack(d, dim=1) for d in depth]
+        lighting = [torch.stack(l, dim=1) for l in lighting]
+        bg = [torch.stack(b, dim=1) for b in bg]
 
         examples['source'] = source
         examples['target'] = target
         examples['mask'] = mask
         examples['depth'] = depth
         examples['lighting'] = lighting
-        # examples['fg_depth'] = img_depth
-        # examples['bg_depth'] = bg_depth
         examples['bg'] = bg
-        
+
         return examples
 
     with accelerator.main_process_first():
         dataset = dataset.with_transform(preprocess_train)
 
-    dataset = dataset.remove_columns(["person"])
+    dataset = dataset.remove_columns(["person", "phi"])
     
     return dataset
 
@@ -369,12 +452,6 @@ def collate_fn(examples):
     depth = torch.stack([example["depth"] for example in examples])
     depth = depth.to(memory_format=torch.contiguous_format).float()
 
-    # fg_depth = torch.stack([example["fg_depth"] for example in examples])
-    # fg_depth = fg_depth.to(memory_format=torch.contiguous_format).float()
-
-    # bg_depth = torch.stack([example["bg_depth"] for example in examples])
-    # bg_depth = bg_depth.to(memory_format=torch.contiguous_format).float()
-
     lighting = torch.stack([example["lighting"] for example in examples])
     lighting = lighting.to(memory_format=torch.contiguous_format).float()
 
@@ -391,8 +468,6 @@ def collate_fn(examples):
         "target": target,
         "mask": mask,
         "depth": depth,
-        # "fg_depth": fg_depth,
-        # "bg_depth": bg_depth,
         "lighting": lighting,
         "bg": bg,
         "prompt_ids": prompt_ids,
@@ -510,7 +585,7 @@ def main(args):
     unet = UNet3DConditionModel.from_pretrained_2d(
         "/data2/lihaochen/models/stable-diffusion-xl-base-1.0/unet", last_model_path=args.pretrained_unet_model_name_or_path,
     )
-    return
+
     controlnext = ControlNext()
     if args.controlnext_model_name_or_path:
         logger.info("Loading existing controlnext weights")
@@ -853,24 +928,31 @@ def main(args):
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
+                b, _, f, h, w = batch["source"].shape
                 # Convert images to latent space
                 pixel_values = batch["target"]*batch["mask"]
+                pixel_values = rearrange(pixel_values, 'b c f h w -> (b f) c h w')
                 latents = vae.encode(pixel_values).latent_dist.mode()
                 latents = latents * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents = latents.to(weight_dtype)
+                latents = rearrange(latents, '(b f) c h w -> b c f h w', f=f)
 
                 pixel_values = batch["source"]*batch["mask"]
+                pixel_values = rearrange(pixel_values, 'b c f h w -> (b f) c h w')
                 latents_source = vae.encode(pixel_values).latent_dist.mode()
                 latents_source = latents_source * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents_source = latents_source.to(weight_dtype)
+                latents_source = rearrange(latents_source, '(b f) c h w -> b c f h w', f=f)
 
                 bg = batch["bg"]
+                bg = rearrange(bg, 'b c f h w -> (b f) c h w')
                 latents_bg = vae.encode(bg).latent_dist.mode()
                 latents_bg = latents_bg * vae.config.scaling_factor
                 if args.pretrained_vae_model_name_or_path is None:
                     latents_bg = latents_bg.to(weight_dtype)
+                latents_bg = rearrange(latents_bg, '(b f) c h w -> b c f h w', f=f)
 
                 # latents = torch.cat([latents, latents_source, latents_bg], dim=1)
                 # Sample noise that we'll add to the latents
@@ -887,9 +969,11 @@ def main(args):
                 noisy_latents = torch.cat([noisy_latents, latents_source, latents_bg], dim=1)
 
                 lighting = batch["lighting"].to(accelerator.device, dtype=torch.float32)
+                lighting = rearrange(lighting, 'b c f h w -> (b f) c h w')
 
                 # random 4x4 mask resize to 32x32
                 l_mask = torch.rand((bsz, 1, 4, 4), device=accelerator.device, dtype=torch.float32)
+                l_mask = repeat(l_mask, 'b c h w -> (b f) c h w', f=f)
                 l_mask = F.interpolate(l_mask, size=(32, 32), mode='bilinear', align_corners=False)
                 l1 = lighting * l_mask
                 l2 = lighting * (1 - l_mask)
@@ -899,9 +983,9 @@ def main(args):
                 lighting = lightenc(lighting)
                 l1 = lightenc(l1)
                 l2 = lightenc(l2)
-                lighting = torch.reshape(lighting, (bsz, 3, 2048))
-                l1 = torch.reshape(l1, (bsz, 3, 2048))
-                l2 = torch.reshape(l2, (bsz, 3, 2048))
+                lighting = torch.reshape(lighting, (bsz*f, 3, 2048))
+                l1 = torch.reshape(l1, (bsz*f, 3, 2048))
+                l2 = torch.reshape(l2, (bsz*f, 3, 2048))
 
                 # fg_depth = batch["fg_depth"].to(accelerator.device, dtype=torch.float32)
                 # bg_depth = batch["bg_depth"].to(accelerator.device, dtype=torch.float32)
@@ -921,8 +1005,9 @@ def main(args):
                 )
                 controls['scale'] *= args.controlnext_scale_factor
 
+                prompt_ids = repeat(batch["prompt_ids"], 'b n c -> (b f) n c', f=f)
                 added_conditions = batch["unet_added_conditions"]
-                enc_hid = torch.cat([batch["prompt_ids"], lighting], dim=1)
+                enc_hid = torch.cat([prompt_ids, lighting], dim=1)
 
                 # print(batch["prompt_ids"].shape) # [2, 77, 2048]
 
@@ -935,7 +1020,7 @@ def main(args):
                         added_cond_kwargs=added_conditions,
                         controls=controls,
                         return_dict=False,
-                    )[0][:, :4, :, :]
+                    )[0][:, :4, :, :, :]
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -947,7 +1032,7 @@ def main(args):
                 noise_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                 # process l1 & l2
-                enc_hid = torch.cat([batch["prompt_ids"], l1], dim=1)
+                enc_hid = torch.cat([prompt_ids, l1], dim=1)
                 with accelerator.autocast():
                     model_pred_l1 = unet(
                         noisy_latents,
@@ -956,9 +1041,9 @@ def main(args):
                         added_cond_kwargs=added_conditions,
                         controls=controls,
                         return_dict=False,
-                    )[0][:, :4, :, :]
+                    )[0][:, :4, :, :, :]
                 
-                enc_hid = torch.cat([batch["prompt_ids"], l2], dim=1)
+                enc_hid = torch.cat([prompt_ids, l2], dim=1)
                 with accelerator.autocast():
                     model_pred_l2 = unet(
                         noisy_latents,
@@ -967,12 +1052,17 @@ def main(args):
                         added_cond_kwargs=added_conditions,
                         controls=controls,
                         return_dict=False,
-                    )[0][:, :4, :, :]
+                    )[0][:, :4, :, :, :]
 
+                model_pred_l1 = rearrange(model_pred_l1, 'b f c h w -> (b f) c h w')
+                model_pred_l2 = rearrange(model_pred_l2, 'b f c h w -> (b f) c h w')
                 mlp_out = consistency_mlp(torch.cat([model_pred_l1, model_pred_l2], dim=1))
+                mlp_out = rearrange(mlp_out, '(b f) c h w -> b c f h w', f=f)
                 # resize mask to the same size as the model output
                 mask = batch["mask"].to(accelerator.device, dtype=torch.float32)
-                mask = F.interpolate(mask, size=(model_pred.shape[2], model_pred.shape[3]), mode='bilinear', align_corners=False)
+                mask = rearrange(mask, 'b c f h w -> (b f) c h w')
+                mask = F.interpolate(mask, size=(model_pred.shape[3], model_pred.shape[4]), mode='bilinear', align_corners=False)
+                mask = rearrange(mask, '(b f) c h w -> b c f h w', f=f)
                 
                 loss_c = consistency_loss_fn(mlp_out, target, mask)
                 # loss_c = F.mse_loss(mlp_out.float(), target.float(), reduction="mean")
@@ -1025,7 +1115,7 @@ def main(args):
                             accelerator.unwrap_model(consistency_mlp),
                             save_path,
                             args,
-                            orig_unet_sd if args.save_weights_increaments else None,
+                            None,
                         )
                         logger.info(f"Saved state to {save_path}")
 
@@ -1054,7 +1144,7 @@ def main(args):
             accelerator.unwrap_model(consistency_mlp),
             save_path,
             args,
-            orig_unet_sd if args.save_weights_increaments else None,
+            None,
         )
 
     accelerator.end_training()

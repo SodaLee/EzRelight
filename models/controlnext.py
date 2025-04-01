@@ -482,8 +482,8 @@ class ControlNetModel(ModelMixin, ConfigMixin):
 
         # Repeat the embeddings num_video_frames times
         # emb: [batch, channels] -> [batch * frames, channels]
-        if F > 1:
-            emb_batch = emb_batch.repeat_interleave(F, dim=0)
+        # if F > 1:
+        #     emb_batch = emb_batch.repeat_interleave(F, dim=0)
         emb = emb_batch
         sample = self.embedding(sample)
         for res, downsample in zip(self.down_res, self.down_sample):
