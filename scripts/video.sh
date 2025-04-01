@@ -11,7 +11,7 @@ accelerate launch train_video.py \
 --set_grads_to_none \
 --proportion_empty_prompts 0.2 \
 --controlnet_scale_factor 1.0 \
---num_train_epochs 1 \
+--num_train_epochs 2 \
 --train_batch_size 1 \
 --mixed_precision fp16 \
 --checkpointing_steps 2000 \

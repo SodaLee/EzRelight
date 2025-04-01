@@ -1010,6 +1010,7 @@ def main(args):
                 enc_hid = torch.cat([prompt_ids, lighting], dim=1)
 
                 # print(batch["prompt_ids"].shape) # [2, 77, 2048]
+                unet._set_static_graph()
 
                 # Predict the noise residual
                 with accelerator.autocast():
