@@ -4,7 +4,9 @@ import torch
 from diffusers import UniPCMultistepScheduler, AutoencoderKL
 from safetensors.torch import load_file
 from pipeline.pipeline_controlnext_img2img import StableDiffusionXLControlNeXtImg2ImgPipeline
+from pipeline.pipeline_controlnext_vid2vid import StableDiffusionXLControlNeXtImg2ImgPipeline as StableDiffusionXLControlNeXtVid2VidPipeline
 from models.unet import UNet2DConditionModel
+from models.unet_3d import UNet3DConditionModel
 from models.controlnext import ControlNetModel as ControlNext
 from models.lightenc import LightEnc, MLP5, DepthFusion
 from . import utils
@@ -210,6 +212,98 @@ def get_pipeline(
 
     return pipeline
 
+def get_pipeline_vid(
+    pretrained_model_name_or_path,
+    unet_model_name_or_path,
+    controlnext_model_name_or_path,
+    lightenc_model_name_or_path,
+    depth_fusion_model_name_or_path=None,
+    vae_model_name_or_path=None,
+    lora_path=None,
+    load_weight_increasement=False,
+    enable_xformers_memory_efficient_attention=False,
+    revision=None,
+    variant=None,
+    hf_cache_dir=None,
+    use_safetensors=True,
+    device=None,
+):
+    pipeline_init_kwargs = {}
+
+    print(f"loading unet from {pretrained_model_name_or_path}")
+    if os.path.isfile(pretrained_model_name_or_path):
+       unet = UNet3DConditionModel.from_pretrained_2d(
+        "/data2/lihaochen/models/stable-diffusion-xl-base-1.0/unet", last_model_path=unet_model_name_or_path,
+    )
+        
+    unet = unet.to(dtype=torch.float16)
+    pipeline_init_kwargs["unet"] = unet
+
+    if vae_model_name_or_path is not None:
+        print(f"loading vae from {vae_model_name_or_path}")
+        vae = AutoencoderKL.from_pretrained(vae_model_name_or_path, cache_dir=hf_cache_dir, torch_dtype=torch.float32).to(device)
+        pipeline_init_kwargs["vae"] = vae
+
+    if controlnext_model_name_or_path is not None:
+        pipeline_init_kwargs["controlnext"] = ControlNext.from_config(CONTROLNET_CONFIG).to(device, dtype=torch.float32)  # init
+        pipeline_init_kwargs["controlnet"] = ControlNext.from_config(CONTROLNET_CONFIG).to(device, dtype=torch.float32)
+
+    if lightenc_model_name_or_path is not None:
+        print(f"loading lightenc from {lightenc_model_name_or_path}")
+        lightenc = LightEnc().to(device, dtype=torch.float32)
+        lightenc.load_state_dict(load_file(lightenc_model_name_or_path))
+    
+    if depth_fusion_model_name_or_path is not None and os.path.isfile(depth_fusion_model_name_or_path):
+        print(f"loading depth_fusion from {depth_fusion_model_name_or_path}")
+        depth_fusion = DepthFusion(128).to(device, dtype=torch.float32)
+        depth_fusion.load_state_dict(load_file(depth_fusion_model_name_or_path))
+    else:
+        depth_fusion = None
+
+    print(f"loading pipeline from {pretrained_model_name_or_path}")
+    if os.path.isfile(pretrained_model_name_or_path):
+        pipeline: StableDiffusionXLControlNeXtImg2ImgPipeline = StableDiffusionXLControlNeXtVid2VidPipeline.from_single_file(
+            pretrained_model_name_or_path,
+            use_safetensors=pretrained_model_name_or_path.endswith(".safetensors"),
+            local_files_only=True,
+            cache_dir=hf_cache_dir,
+            **pipeline_init_kwargs,
+        )
+    else:
+        pipeline: StableDiffusionXLControlNeXtImg2ImgPipeline = StableDiffusionXLControlNeXtVid2VidPipeline.from_pretrained(
+            pretrained_model_name_or_path,
+            revision=revision,
+            variant=variant,
+            use_safetensors=use_safetensors,
+            cache_dir=hf_cache_dir,
+            **pipeline_init_kwargs,
+        )
+
+    pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
+
+    if controlnext_model_name_or_path is not None:
+        print(f"loading controlnext controlnext from {controlnext_model_name_or_path}")
+        pipeline.load_controlnext_controlnext_weights(
+            controlnext_model_name_or_path,
+            use_safetensors=True,
+            torch_dtype=torch.float32,
+            cache_dir=hf_cache_dir,
+        )
+    pipeline.set_progress_bar_config()
+    pipeline.lightenc = lightenc
+    pipeline.depth_fusion = depth_fusion
+    pipeline = pipeline.to(device, dtype=torch.float16)
+
+    if lora_path is not None:
+        pipeline.load_lora_weights(lora_path)
+    if enable_xformers_memory_efficient_attention:
+        pipeline.enable_xformers_memory_efficient_attention()
+
+    gc.collect()
+    if str(device) == 'cuda' and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return pipeline
 
 def get_scheduler(
     scheduler_name,

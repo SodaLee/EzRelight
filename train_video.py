@@ -977,9 +977,9 @@ def main(args):
                 l_mask = F.interpolate(l_mask, size=(32, 32), mode='bilinear', align_corners=False)
                 l1 = lighting * l_mask
                 l2 = lighting * (1 - l_mask)
-                lighting = torch.reshape(lighting, (bsz, -1))
-                l1 = torch.reshape(l1, (bsz, -1))
-                l2 = torch.reshape(l2, (bsz, -1))
+                lighting = torch.reshape(lighting, (bsz*f, -1))
+                l1 = torch.reshape(l1, (bsz*f, -1))
+                l2 = torch.reshape(l2, (bsz*f, -1))
                 lighting = lightenc(lighting)
                 l1 = lightenc(l1)
                 l2 = lightenc(l2)
