@@ -23,6 +23,7 @@ from transformers import AutoTokenizer, PretrainedConfig
 from torchvision.transforms import v2
 from torchvision.transforms.v2.functional import crop
 import tqdm
+from einops import rearrange
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 # check_min_version("0.31.0.dev0")
@@ -81,6 +82,9 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         gt = (gt + 1) / 2.0
         bg = batch["bg"].to(dtype=weight_dtype)
         validation_image = validation_image*batch["mask"] + bg*(1-batch["mask"])
+        validation_image = rearrange(validation_image, "b c f h w -> (b f) c h w")
+        gt = rearrange(gt, "b c f h w -> (b f) c h w")
+
         inputs = (batch["source"]*batch["mask"]).to(dtype=weight_dtype)
 
         images = []
@@ -114,29 +118,30 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
                 output_type='pt',
             ).images
         image = image*batch["mask"] + bg*(1-batch["mask"])
+        image = rearrange(image, "b c f h w -> (b f) c h w")
 
-        images.append(image[0])
+        images.append(image)
 
         image_logs.append(
-            {"validation_image": validation_image[0], "images": images, "validation_prompt": validation_prompt, "gt": gt[0]}
+            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt, "gt": gt}
         )
 
         log = image_logs[-1]
         images = log["images"]
-        validation_prompt = log["validation_prompt"]
-        validation_image = log["validation_image"]
-        gt = log["gt"]
+        # validation_prompt = log["validation_prompt"]
+        validation_images = log["validation_image"]
+        gts = log["gt"]
 
-        formatted_images = []
-        formatted_images.append(np.asarray(validation_image.permute(1, 2, 0).cpu()))
-        for image in images:
-            formatted_images.append(np.asarray(image.permute(1, 2, 0).cpu()))
-        formatted_images.append(np.asarray(gt.permute(1, 2, 0).cpu()))
-        formatted_images = np.concatenate(formatted_images, 1)
+        for j in range(f):
+            formatted_images = []
+            formatted_images.append(np.asarray(validation_images[j].permute(1, 2, 0).cpu()))
+            formatted_images.append(np.asarray(images[j].permute(1, 2, 0).cpu()))
+            formatted_images.append(np.asarray(gts[j].permute(1, 2, 0).cpu()))
+            formatted_images = np.concatenate(formatted_images, 1)
 
-        file_path = os.path.join(save_dir_path, "image_{}.png".format(i))
-        formatted_images = cv2.cvtColor(formatted_images, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(file_path, formatted_images * 255)
+            file_path = os.path.join(save_dir_path, f"image_{i}_{j}.png")
+            formatted_images = cv2.cvtColor(formatted_images, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(file_path, formatted_images * 255)
 
     gc.collect()
     if str(device) == 'cuda' and torch.cuda.is_available():

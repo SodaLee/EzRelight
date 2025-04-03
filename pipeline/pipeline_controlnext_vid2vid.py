@@ -1876,7 +1876,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
             image = self.watermark.apply_watermark(image)
 
         image = self.image_processor.postprocess(image, output_type=output_type)
-        # image = rearrange(image, "(b f) c h w -> b c f h w", f=f)
+        image = rearrange(image, "(b f) c h w -> b c f h w", f=f)
 
         # Offload all models
         self.maybe_free_model_hooks()

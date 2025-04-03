@@ -925,6 +925,7 @@ def main(args):
     )
     loss_recorder = LossRecorder(gamma=0.9)
 
+    unet._set_static_graph()
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
@@ -1010,7 +1011,6 @@ def main(args):
                 enc_hid = torch.cat([prompt_ids, lighting], dim=1)
 
                 # print(batch["prompt_ids"].shape) # [2, 77, 2048]
-                unet._set_static_graph()
 
                 # Predict the noise residual
                 with accelerator.autocast():
@@ -1055,8 +1055,8 @@ def main(args):
                         return_dict=False,
                     )[0][:, :4, :, :, :]
 
-                model_pred_l1 = rearrange(model_pred_l1, 'b f c h w -> (b f) c h w')
-                model_pred_l2 = rearrange(model_pred_l2, 'b f c h w -> (b f) c h w')
+                model_pred_l1 = rearrange(model_pred_l1, 'b c f h w -> (b f) c h w')
+                model_pred_l2 = rearrange(model_pred_l2, 'b c f h w -> (b f) c h w')
                 mlp_out = consistency_mlp(torch.cat([model_pred_l1, model_pred_l2], dim=1))
                 mlp_out = rearrange(mlp_out, '(b f) c h w -> b c f h w', f=f)
                 # resize mask to the same size as the model output
