@@ -231,8 +231,7 @@ def get_pipeline_vid(
     pipeline_init_kwargs = {}
 
     print(f"loading unet from {pretrained_model_name_or_path}")
-    if os.path.isfile(pretrained_model_name_or_path):
-       unet = UNet3DConditionModel.from_pretrained_2d(
+    unet = UNet3DConditionModel.from_pretrained_2d(
         "/data2/lihaochen/models/stable-diffusion-xl-base-1.0/unet", last_model_path=unet_model_name_or_path,
     )
         

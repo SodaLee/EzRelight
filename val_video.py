@@ -66,7 +66,6 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
     else:
         generator = torch.Generator(device=device).manual_seed(args.seed)
 
-    image_logs = []
     inference_ctx = torch.autocast(device)
 
     save_dir_path = os.path.join(args.output_dir, "eval_img")
@@ -77,17 +76,18 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         b, _, f, h, w = batch["source"].shape
         validation_image = batch["source"].to(dtype=weight_dtype)
         validation_image = (validation_image + 1) / 2.0
-        validation_prompt = [batch["caption"][0]] * f
+        validation_prompt = batch["caption"][0][0]
         gt = batch["target"].to(dtype=weight_dtype)
         gt = (gt + 1) / 2.0
         bg = batch["bg"].to(dtype=weight_dtype)
+        bg = (bg + 1) / 2.0
         validation_image = validation_image*batch["mask"] + bg*(1-batch["mask"])
         validation_image = rearrange(validation_image, "b c f h w -> (b f) c h w")
         gt = rearrange(gt, "b c f h w -> (b f) c h w")
 
         inputs = (batch["source"]*batch["mask"]).to(dtype=weight_dtype)
 
-        images = []
+        # images = []
         control_image = (batch["source"]*batch["mask"]).to(device, dtype=torch.float32)
         control_image_2 = batch["bg"].to(device, dtype=torch.float32)
 
@@ -120,14 +120,8 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         image = image*batch["mask"] + bg*(1-batch["mask"])
         image = rearrange(image, "b c f h w -> (b f) c h w")
 
-        images.append(image)
-
-        image_logs.append(
-            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt, "gt": gt}
-        )
-
-        log = image_logs[-1]
-        images = log["images"]
+        log = {"validation_image": validation_image, "images": image, "validation_prompt": validation_prompt, "gt": gt}
+        log_images = log["images"]
         # validation_prompt = log["validation_prompt"]
         validation_images = log["validation_image"]
         gts = log["gt"]
@@ -135,7 +129,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         for j in range(f):
             formatted_images = []
             formatted_images.append(np.asarray(validation_images[j].permute(1, 2, 0).cpu()))
-            formatted_images.append(np.asarray(images[j].permute(1, 2, 0).cpu()))
+            formatted_images.append(np.asarray(log_images[j].permute(1, 2, 0).cpu()))
             formatted_images.append(np.asarray(gts[j].permute(1, 2, 0).cpu()))
             formatted_images = np.concatenate(formatted_images, 1)
 
@@ -147,7 +141,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
     if str(device) == 'cuda' and torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    return image_logs
+    return []
 
 def import_model_class_from_model_name_or_path(
     pretrained_model_name_or_path: str, revision: str, subfolder: str = "text_encoder"
@@ -403,12 +397,6 @@ def collate_fn(examples):
     depth = torch.stack([example["depth"] for example in examples])
     depth = depth.to(memory_format=torch.contiguous_format).float()
 
-    fg_depth = torch.stack([example["fg_depth"] for example in examples])
-    fg_depth = fg_depth.to(memory_format=torch.contiguous_format).float()
-
-    bg_depth = torch.stack([example["bg_depth"] for example in examples])
-    bg_depth = bg_depth.to(memory_format=torch.contiguous_format).float()
-
     lighting = torch.stack([example["lighting"] for example in examples])
     lighting = lighting.to(memory_format=torch.contiguous_format).float()
 
@@ -423,8 +411,6 @@ def collate_fn(examples):
         "mask": mask,
         "mask": mask,
         "depth": depth,
-        "fg_depth": fg_depth,
-        "bg_depth": bg_depth,
         "lighting": lighting,
         "bg": bg,
         "caption": caption,

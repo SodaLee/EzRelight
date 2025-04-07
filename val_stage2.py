@@ -79,6 +79,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         gt = batch["target"].to(dtype=weight_dtype)
         gt = (gt + 1) / 2.0
         bg = batch["bg"].to(dtype=weight_dtype)
+        bg = (bg + 1) / 2.0
         validation_image = validation_image*batch["soft_mask"] + bg*(1-batch["soft_mask"])
         inputs = (batch["source"]*batch["soft_mask"]).to(dtype=weight_dtype)
 
@@ -284,7 +285,7 @@ def prepare_train_dataset(dataset):
 
         bg = [cv2.imread(bg, cv2.IMREAD_UNCHANGED) for bg in examples['bg']]
         bg = [cv2.cvtColor(b, cv2.COLOR_BGR2RGB) for b in bg]
-        bg = [conditioning_image_transforms(b) for b in bg]
+        bg = [image_transforms(b) for b in bg]
 
         # phi = [torch.tensor(phi) for phi in examples['phi']]
 

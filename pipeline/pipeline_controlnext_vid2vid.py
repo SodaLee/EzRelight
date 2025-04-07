@@ -703,16 +703,16 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                 )
 
                 text_input_ids = text_inputs.input_ids
-                untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
+                # untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
 
-                if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
-                    text_input_ids, untruncated_ids
-                ):
-                    removed_text = tokenizer.batch_decode(untruncated_ids[:, tokenizer.model_max_length - 1: -1])
-                    logger.warning(
-                        "The following part of your input was truncated because CLIP can only handle sequences up to"
-                        f" {tokenizer.model_max_length} tokens: {removed_text}"
-                    )
+                # if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
+                #     text_input_ids, untruncated_ids
+                # ):
+                #     removed_text = tokenizer.batch_decode(untruncated_ids[:, tokenizer.model_max_length - 1: -1])
+                #     logger.warning(
+                #         "The following part of your input was truncated because CLIP can only handle sequences up to"
+                #         f" {tokenizer.model_max_length} tokens: {removed_text}"
+                #     )
 
                 prompt_embeds = text_encoder(text_input_ids.to(device), output_hidden_states=True)
 
@@ -734,7 +734,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                 lighting = torch.reshape(light_image, (b*f, -1))
                 lighting = self.lightenc(lighting)
                 lighting = torch.reshape(lighting, (b*f, 3, 2048))
-                # prompt_embeds = repeat(prompt_embeds, "b n c -> (b f) n c", f=f)
+                prompt_embeds = repeat(prompt_embeds, "b n c -> (b f) n c", f=f)
                 prompt_embeds = torch.cat([prompt_embeds, lighting], dim=1)
 
         # get unconditional embeddings for classifier free guidance
@@ -799,6 +799,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
             prompt_embeds = prompt_embeds.to(dtype=self.unet.dtype, device=device)
 
         bs_embed, seq_len, _ = prompt_embeds.shape
+        b = 1
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
@@ -816,11 +817,11 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
             negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
 
         pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
-            bs_embed * num_images_per_prompt, -1
+            b * num_images_per_prompt, -1
         )
         if do_classifier_free_guidance:
             negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
-                bs_embed * num_images_per_prompt, -1
+                b * num_images_per_prompt, -1
             )
 
         if self.text_encoder is not None:
