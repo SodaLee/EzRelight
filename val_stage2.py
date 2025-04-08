@@ -65,7 +65,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
     else:
         generator = torch.Generator(device=device).manual_seed(args.seed)
 
-    image_logs = []
+    # image_logs = []
     inference_ctx = torch.autocast(device)
 
     save_dir_path = os.path.join(args.output_dir, "eval_img")
@@ -89,11 +89,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
 
         lighting = batch["lighting"].to(device, dtype=torch.float32)
 
-        # fg_depth = batch["fg_depth"].to(device, dtype=torch.float32)
-        # bg_depth = batch["bg_depth"].to(device, dtype=torch.float32)
         depth = batch["depth"].to(device, dtype=torch.float32)
-        # depth = torch.cat([fg_depth, bg_depth], dim=1)
-        # depth = pipeline.depth_fusion(depth)
 
         controlnext_image = depth
         ref_image = (batch["source"]*batch["soft_mask"]).to(device, dtype=torch.float32)
@@ -121,32 +117,50 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
 
         images.append(image[0])
 
-        image_logs.append(
-            {"validation_image": validation_image[0], "images": images, "validation_prompt": validation_prompt, "gt": gt[0]}
-        )
+        log = {"validation_image": validation_image[0], "images": images, "validation_prompt": validation_prompt, "gt": gt[0]}
 
-        log = image_logs[-1]
         images = log["images"]
         validation_prompt = log["validation_prompt"]
         validation_image = log["validation_image"]
         gt = log["gt"]
 
-        formatted_images = []
-        formatted_images.append(np.asarray(validation_image.permute(1, 2, 0).cpu()))
-        for image in images:
-            formatted_images.append(np.asarray(image.permute(1, 2, 0).cpu()))
-        formatted_images.append(np.asarray(gt.permute(1, 2, 0).cpu()))
-        formatted_images = np.concatenate(formatted_images, 1)
+        # formatted_images = []
+        # formatted_images.append(np.asarray(validation_image.permute(1, 2, 0).cpu()))
+        # for image in images:
+        #     formatted_images.append(np.asarray(image.permute(1, 2, 0).cpu()))
+        # formatted_images.append(np.asarray(gt.permute(1, 2, 0).cpu()))
+        # formatted_images = np.concatenate(formatted_images, 1)
 
-        file_path = os.path.join(save_dir_path, "image_{}.png".format(i))
-        formatted_images = cv2.cvtColor(formatted_images, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(file_path, formatted_images * 255)
+        # file_path = os.path.join(save_dir_path, "image_{}.png".format(i))
+        # formatted_images = cv2.cvtColor(formatted_images, cv2.COLOR_RGB2BGR)
+        # cv2.imwrite(file_path, formatted_images * 255)
+
+        for image in images:
+            image = image.permute(1, 2, 0).cpu().numpy()
+            image = (image * 255).astype(np.uint8)
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            save_dir_path = '/data1/lihaochen/Relight/stage2/val_harddepth'
+            if not os.path.exists(save_dir_path):
+                os.makedirs(save_dir_path)
+            person = batch["person"][0].split('/')[-1]
+            file_path = os.path.join(save_dir_path, f"{person}.png")
+            cv2.imwrite(file_path, image)
+        
+        # gt = gt.permute(1, 2, 0).cpu().numpy()
+        # gt = (gt * 255).astype(np.uint8)
+        # gt = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
+        # save_dir_path = '/data1/lihaochen/Relight/stage2/gt'
+        # if not os.path.exists(save_dir_path):
+        #     os.makedirs(save_dir_path)
+        # person = batch["person"][0].split('/')[-1]
+        # file_path = os.path.join(save_dir_path, f"{person}.png")
+        # cv2.imwrite(file_path, gt)
 
     gc.collect()
     if str(device) == 'cuda' and torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    return image_logs
+    return []
 
 def import_model_class_from_model_name_or_path(
     pretrained_model_name_or_path: str, revision: str, subfolder: str = "text_encoder"
@@ -262,8 +276,8 @@ def prepare_train_dataset(dataset):
         # mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
         img_depth = [np.load(depth) for depth in examples['img_depth']]
         bg_depth = [np.load(depth) for depth in examples['bg_depth']]
-        # depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
-        depth = [np.load(depth) for depth in examples['fused_depth']]
+        depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
+        # depth = [np.load(depth) for depth in examples['fused_depth']]
         
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]
@@ -303,7 +317,7 @@ def prepare_train_dataset(dataset):
 
     dataset = dataset.with_transform(preprocess_train)
 
-    dataset = dataset.remove_columns(["person"])
+    # dataset = dataset.remove_columns(["person"])
     
     return dataset
 
@@ -338,6 +352,8 @@ def collate_fn(examples):
 
     caption = [example["caption"] for example in examples]
 
+    person = [example["person"] for example in examples]
+
     return {
         "source": source,
         "target": target,
@@ -349,6 +365,7 @@ def collate_fn(examples):
         "lighting": lighting,
         "bg": bg,
         "caption": caption,
+        "person": person,
     }
 
 def main(args):
