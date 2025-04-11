@@ -126,16 +126,45 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         validation_images = log["validation_image"]
         gts = log["gt"]
 
-        for j in range(f):
-            formatted_images = []
-            formatted_images.append(np.asarray(validation_images[j].permute(1, 2, 0).cpu()))
-            formatted_images.append(np.asarray(log_images[j].permute(1, 2, 0).cpu()))
-            formatted_images.append(np.asarray(gts[j].permute(1, 2, 0).cpu()))
-            formatted_images = np.concatenate(formatted_images, 1)
+        # for j in range(f):
+        #     formatted_images = []
+        #     formatted_images.append(np.asarray(validation_images[j].permute(1, 2, 0).cpu()))
+        #     formatted_images.append(np.asarray(log_images[j].permute(1, 2, 0).cpu()))
+        #     formatted_images.append(np.asarray(gts[j].permute(1, 2, 0).cpu()))
+        #     formatted_images = np.concatenate(formatted_images, 1)
 
-            file_path = os.path.join(save_dir_path, f"image_{i}_{j}.png")
-            formatted_images = cv2.cvtColor(formatted_images, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(file_path, formatted_images * 255)
+        #     file_path = os.path.join(save_dir_path, f"image_{i}_{j}.png")
+        #     formatted_images = cv2.cvtColor(formatted_images, cv2.COLOR_RGB2BGR)
+        #     cv2.imwrite(file_path, formatted_images * 255)
+
+        file_names = batch["file_names"][0]
+        for j in range(f):
+            img = log_images[j].permute(1, 2, 0).cpu().numpy()
+            img = (img * 255).astype(np.uint8)
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            # '/data/lihaochen/datasets/TikTok_dataset/{video_name}/relight/{frame_name}.png'
+            f_name = file_names[j]
+            video_name = f_name.split('/')[-3]
+            frame_name = f_name.split('/')[-1].split('.')[0]
+            save_dir_path = '/data1/lihaochen/Relight/video/val'
+            if not os.path.exists(save_dir_path):
+                os.makedirs(save_dir_path)
+            file_path = os.path.join(save_dir_path, f"{video_name}_{frame_name}_{j}.png")
+            cv2.imwrite(file_path, img)
+        
+        for j in range(f):
+            gt = gts[j].permute(1, 2, 0).cpu().numpy()
+            gt = (gt * 255).astype(np.uint8)
+            gt = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
+            # '/data/lihaochen/datasets/TikTok_dataset/{video_name}/relight/{frame_name}.png'
+            f_name = file_names[j]
+            video_name = f_name.split('/')[-3]
+            frame_name = f_name.split('/')[-1].split('.')[0]
+            save_dir_path = '/data1/lihaochen/Relight/video/gt'
+            if not os.path.exists(save_dir_path):
+                os.makedirs(save_dir_path)
+            file_path = os.path.join(save_dir_path, f"{video_name}_{frame_name}_{j}.png")
+            cv2.imwrite(file_path, gt)
 
     gc.collect()
     if str(device) == 'cuda' and torch.cuda.is_available():
@@ -297,6 +326,8 @@ def prepare_train_dataset(dataset):
         f = len(examples['source'])
         bs = len(examples['source'][0])
 
+        file_names = examples['source']
+
         source = []
         for sources in examples['source']:
             for s in sources:
@@ -371,6 +402,7 @@ def prepare_train_dataset(dataset):
         examples['depth'] = depth
         examples['lighting'] = lighting
         examples['bg'] = bg
+        examples['file_names'] = file_names
 
         return examples
 
@@ -405,6 +437,8 @@ def collate_fn(examples):
 
     caption = [example["caption"] for example in examples]
 
+    file_names = [example["file_names"] for example in examples]
+
     return {
         "source": source,
         "target": target,
@@ -414,6 +448,7 @@ def collate_fn(examples):
         "lighting": lighting,
         "bg": bg,
         "caption": caption,
+        "file_names": file_names,
     }
 
 def main(args):
