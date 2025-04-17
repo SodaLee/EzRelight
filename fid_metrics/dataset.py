@@ -4,6 +4,7 @@ from typing import List
 import re
 from collections import defaultdict
 
+import os
 import cv2
 import torch
 import torchvision.transforms as T
@@ -36,8 +37,12 @@ class ImageDataset(Dataset):
 
         self.files = []
         for image_dir in self.image_dirs:
-            imgs = glob.glob(image_dir + (f'/*.{ext}' if ext else '/*'))
-            self.files.extend(imgs)
+            imgs = set(glob.glob(image_dir + (f'/*.{ext}' if ext else '/*')))
+            exclude_imgs = set(glob.glob(image_dir + f'/*_2.{ext}') + glob.glob(image_dir + f'/*_3.{ext}'))
+    
+            filtered_imgs = list(imgs - exclude_imgs)
+            self.files.extend(filtered_imgs)
+        self.files = sorted(self.files)
         print(f'Loaded {len(self.files)} images')
 
     def __len__(self):
@@ -78,6 +83,7 @@ class ImageSequenceDataset(Dataset):
                     self.samples.append((vid_idx, start_idx))
 
         print(f'Loaded {len(self.frame_paths)} images')
+        print(f'Loaded {len(self.samples)} sequences')
 
     def __len__(self):
         return len(self.samples)

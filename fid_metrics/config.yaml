@@ -4,17 +4,17 @@ metrics:
       dims: 2048
     data:
       dataset:
-        resize_shape: [256, 512]
+        resize_shape: [512, 512]
         ext: png
       batch_size: 64
       num_workers: 16
 
   - type: fvd
     model:
-      type: videogpt
-      path: i3d_pretrained_400.pt
-      # type: styleganv
-      # path: i3d_torchscript.pt
+      # type: videogpt
+      # path: fid_metrics/i3d_torchscript.pt
+      type: styleganv
+      path: fid_metrics/i3d_torchscript.pt
     data:
       dataset:
         sequence_length: 16
