@@ -948,6 +948,7 @@ def main(args):
                     timesteps,
                 )
                 controls['scale'] *= args.controlnext_scale_factor
+                controls = None
 
                 added_conditions = batch["unet_added_conditions"]
                 enc_hid = torch.cat([batch["prompt_ids"], lighting], dim=1)

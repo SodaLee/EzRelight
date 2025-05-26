@@ -80,6 +80,8 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         gt = (gt + 1) / 2.0
         bg = batch["bg"].to(dtype=weight_dtype)
         bg = (bg + 1) / 2.0
+        source = batch["source"].to(dtype=weight_dtype)
+        source = (source + 1) / 2.0
         validation_image = validation_image*batch["soft_mask"] + bg*(1-batch["soft_mask"])
         inputs = (batch["source"]*batch["soft_mask"]).to(dtype=weight_dtype)
 
@@ -139,7 +141,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
             image = image.permute(1, 2, 0).cpu().numpy()
             image = (image * 255).astype(np.uint8)
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            save_dir_path = '/data1/lihaochen/Relight/stage2/val_harddepth'
+            save_dir_path = '/data1/lihaochen/Relight/stage2/val_nodepth'
             if not os.path.exists(save_dir_path):
                 os.makedirs(save_dir_path)
             person = batch["person"][0].split('/')[-1]
@@ -155,6 +157,17 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
         # person = batch["person"][0].split('/')[-1]
         # file_path = os.path.join(save_dir_path, f"{person}.png")
         # cv2.imwrite(file_path, gt)
+
+        # source = source[0]
+        # source = source.permute(1, 2, 0).cpu().numpy()
+        # source = (source * 255).astype(np.uint8)
+        # source = cv2.cvtColor(source, cv2.COLOR_RGB2BGR)
+        # save_dir_path = '/data1/lihaochen/Relight/stage2/source'
+        # if not os.path.exists(save_dir_path):
+        #     os.makedirs(save_dir_path)
+        # person = batch["person"][0].split('/')[-1]
+        # file_path = os.path.join(save_dir_path, f"{person}.png")
+        # cv2.imwrite(file_path, source)
 
     gc.collect()
     if str(device) == 'cuda' and torch.cuda.is_available():

@@ -85,6 +85,16 @@ if __name__ == "__main__":
     foreground = np.pad(foreground, ((top, bottom), (left, right)), mode="constant", constant_values=0)
     foreground_rgba = np.pad(foreground_rgba, ((top, bottom), (left, right), (0, 0)), mode="constant", constant_values=0)
 
+    alpha = foreground_rgba[:, :, 3] / 255.0
+    d_fg = alpha * foreground + (1 - alpha) * background
+    fg = get_colored_depth(d_fg)
+    bg = get_colored_depth(background)
+    fg = np.where(alpha[:, :, None] > 0, fg, 0)
+    fg_img = Image.fromarray(fg)
+    fg_img.save("foreground.png")
+    bg_img = Image.fromarray(bg)
+    bg_img.save("background.png")
+
     #integrate the depth images
     integrated_depth = integrate_depth(foreground_rgba, foreground, background)
 
