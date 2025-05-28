@@ -43,63 +43,91 @@ class MLP5(nn.Module):
         return x
 
 class DepthFusion(nn.Module):
-    def __init__(self, hidden_size=128):
+    def __init__(self, in_channels=2, feature_dim=64):
+        """
+        Args:
+            in_channels: 输入通道数（fg_depth 和 bg_depth）
+            feature_dim: 中间特征通道
+        """
         super(DepthFusion, self).__init__()
-        # 编码器
-        self.encoder1 = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.ReLU()
-        )
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.encoder2 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.ReLU()
-        )
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        # 空洞卷积层
-        self.dilated_conv = nn.Sequential(
-            nn.Conv2d(128, 256, kernel_size=3, padding=2, dilation=2),
-            nn.ReLU(),
-            nn.Conv2d(256, 256, kernel_size=3, padding=4, dilation=4),
-            nn.ReLU()
-        )
-        # 解码器
-        self.up1 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
-        self.decoder1 = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.ReLU()
-        )
-        self.up2 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
-        self.decoder2 = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.ReLU()
-        )
-        # 输出层
-        self.final_conv = nn.Conv2d(64, 1, kernel_size=1)
 
-    def forward(self, x):
-        # 编码器
-        e1 = self.encoder1(x)
-        p1 = self.pool1(e1)
-        e2 = self.encoder2(p1)
-        p2 = self.pool2(e2)
-        # 空洞卷积
-        d1 = self.dilated_conv(p2)
-        # 解码器
-        u1 = self.up1(d1)
-        c1 = torch.cat([u1, e2], dim=1)
-        d2 = self.decoder1(c1)
-        u2 = self.up2(d2)
-        c2 = torch.cat([u2, e1], dim=1)
-        d3 = self.decoder2(c2)
-        # 输出
-        out = self.final_conv(d3)
-        return out
+        # 仿射变换预测（全图级别）
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, feature_dim, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(feature_dim, feature_dim, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1)
+        )
+        self.affine_regressor = nn.Linear(feature_dim, 2)
+
+        # 动态底部区域深度偏移估计
+        self.depth_bias_predictor = nn.Sequential(
+            nn.Conv2d(2, 16, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(16, 1)
+        )
+
+    def forward(self, depth, fg_mask):
+        """
+        Args:
+            depth: Tensor [B, 2, H, W] → 前景深度 + 背景深度
+            fg_mask: Tensor [B, 1, H, W], range ∈ [0, 1]（显式前景掩码）
+        Returns:
+            fg_depth_aligned: [B, 1, H, W] — 对齐后的前景深度图
+        """
+        B, C, H, W = depth.shape
+        assert C == 2 and fg_mask.shape == (B, 1, H, W)
+
+        fg_depth = depth[:, 0:1, :, :]
+        bg_depth = depth[:, 1:2, :, :]
+
+        # ---------- Step 1: 全局仿射变换 ----------
+        global_feat = self.encoder(depth).view(B, -1)
+        affine_params = self.affine_regressor(global_feat)  # [B, 2]
+        scale = affine_params[:, 0].view(B, 1, 1, 1)
+        shift = affine_params[:, 1].view(B, 1, 1, 1)
+        fg_depth_affine = fg_depth * scale + shift
+
+        # ---------- Step 2: 动态底部区域提取 ----------
+        # 对每个样本独立处理
+        depth_bias_list = []
+        for b in range(B):
+            mask = fg_mask[b, 0]  # [H, W]
+            mask_sum = mask.sum()
+
+            if mask_sum < 1e-4:
+                # 极端情况：前景缺失
+                depth_bias_list.append(torch.tensor([0.0], device=depth.device))
+                continue
+
+            # 获取前景区域中每个像素的 y 坐标加权平均 → 得到重心 y 坐标
+            y_coords = torch.arange(H, device=depth.device).float().view(H, 1).expand(H, W)
+            fg_y_center = (mask * y_coords).sum() / (mask_sum + 1e-6)
+
+            # 选取重心以下（或某范围）的像素作为“底部前景区域”
+            delta = int(0.2 * H)  # 可调：底部区域高度（如20%）
+            y_start = int(min(H - 1, max(0, fg_y_center.item())))
+            y_end = min(H, y_start + delta)
+
+            # 构造底部 mask（在前景 mask 内 + 位于底部）
+            bottom_mask = torch.zeros_like(mask)
+            bottom_mask[y_start:y_end, :] = 1.0
+            bottom_mask = bottom_mask * mask  # 同时满足两个条件
+
+            # 应用到底部区域的深度
+            fg_bot = fg_depth_affine[b, 0] * bottom_mask
+            bg_bot = bg_depth[b, 0] * bottom_mask
+            bottom_pair = torch.stack([fg_bot, bg_bot], dim=0).unsqueeze(0)  # [1, 2, H, W]
+
+            bias = self.depth_bias_predictor(bottom_pair).view(1)  # [1]
+            depth_bias_list.append(bias)
+
+        # 拼接所有样本偏移值
+        depth_bias = torch.stack(depth_bias_list, dim=0).view(B, 1, 1, 1)
+
+        # ---------- Step 3: 校正输出 ----------
+        fg_depth_aligned = fg_depth_affine + depth_bias
+        return fg_depth_aligned

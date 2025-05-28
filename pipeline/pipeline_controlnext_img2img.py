@@ -1750,7 +1750,7 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
                     added_cond_kwargs["image_embeds"] = image_embeds
 
                 unet_additional_args = {}
-                if self.controlnext is not None:
+                if controlnext_image is not None and self.controlnext is not None:
                     controls = self.controlnext(
                         controlnext_image,
                         t,
@@ -1765,6 +1765,9 @@ class StableDiffusionXLControlNeXtImg2ImgPipeline(
 
                     controls['scale'] *= controlnet_scale
                     unet_additional_args["controls"] = controls
+                else:
+                    controls = None
+                    unet_additional_args["controls"] = None
 
                 noise_pred = self.unet(
                     latent_model_input,
