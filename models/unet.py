@@ -44,16 +44,19 @@ from diffusers.models.embeddings import (
     Timesteps,
 )
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.unets.unet_2d_blocks import (
-    get_down_block,
-    get_mid_block,
-    get_up_block,
-)
-# from .unet_2d_blocks import (
+# from diffusers.models.unets.unet_2d_blocks import (
 #     get_down_block,
 #     get_mid_block,
 #     get_up_block,
 # )
+from .unet_2d_blocks import (
+    get_down_block,
+    get_mid_block,
+    get_up_block,
+)
+import os
+import json
+from einops import rearrange
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -1285,6 +1288,11 @@ class UNet2DConditionModel(
             controls = (controls - mean_control) * (std_latents / (std_control + 1e-12)) + mean_latents
             controls = nn.functional.adaptive_avg_pool2d(controls, sample.shape[-2:])
             sample = sample + controls * scale
+            # use for cross attention
+            depth_control = nn.functional.adaptive_avg_pool2d(controls, (8, 8))
+            depth_control = rearrange(depth_control, "b c h w -> b (h w) c")
+            depth_diff = torch.cdist(depth_control, depth_control, p=2)
+            depth_attention_mask = -depth_diff * 1.0
 
         for i, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
@@ -1300,10 +1308,11 @@ class UNet2DConditionModel(
                     attention_mask=attention_mask,
                     cross_attention_kwargs=cross_attention_kwargs,
                     encoder_attention_mask=encoder_attention_mask,
+                    depth_control=depth_control,
                     **additional_residuals,
                 )
             else:
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
+                sample, res_samples = downsample_block(hidden_states=sample, temb=emb, depth_control=depth_control)
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
                     sample += down_intrablock_additional_residuals.pop(0)
 
@@ -1330,9 +1339,10 @@ class UNet2DConditionModel(
                     attention_mask=attention_mask,
                     cross_attention_kwargs=cross_attention_kwargs,
                     encoder_attention_mask=encoder_attention_mask,
+                    depth_control=depth_control,
                 )
             else:
-                sample = self.mid_block(sample, emb)
+                sample = self.mid_block(sample, emb, depth_control=depth_control)
 
             # To support T2I-Adapter-XL
             if (
@@ -1367,6 +1377,7 @@ class UNet2DConditionModel(
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
+                    depth_control=depth_control,
                 )
             else:
                 sample = upsample_block(
@@ -1374,6 +1385,7 @@ class UNet2DConditionModel(
                     temb=emb,
                     res_hidden_states_tuple=res_samples,
                     upsample_size=upsample_size,
+                    depth_control=depth_control,
                 )
 
         # 6. post-process
@@ -1390,3 +1402,57 @@ class UNet2DConditionModel(
             return (sample,)
 
         return UNet2DConditionOutput(sample=sample)
+    
+    @classmethod
+    def from_pretrained_2d(cls, pretrained_model_path, last_model_path=None, subfolder=None, unet_additional_kwargs=None):
+        if subfolder is not None:
+            pretrained_model_path = os.path.join(pretrained_model_path, subfolder)
+        print(f"loaded temporal unet's pretrained weights from {pretrained_model_path} ...")
+
+        config_file = os.path.join(pretrained_model_path, 'config.json')
+        if not os.path.isfile(config_file):
+            raise RuntimeError(f"{config_file} does not exist")
+        with open(config_file, "r") as f:
+            config = json.load(f)
+        config["_class_name"] = cls.__name__
+        config["down_block_types"] = [
+            "DownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+        ]
+        config["up_block_types"] = [
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "UpBlock2D",
+        ]
+        config["mid_block_type"] = "UNetMidBlock2DCrossAttn"
+
+        # from diffusers.utils import WEIGHTS_NAME
+        from safetensors.torch import load_file
+        model = cls.from_config(config)
+        model_file = os.path.join(pretrained_model_path, 'diffusion_pytorch_model.fp16.safetensors')
+        if not os.path.isfile(model_file):
+            raise RuntimeError(f"{model_file} does not exist")
+        # state_dict = torch.load(model_file, map_location="cpu")
+        state_dict = load_file(model_file)
+
+        m, u = model.load_state_dict(state_dict, strict=False)
+        print(f"### missing keys: {len(m)}; \n### unexpected keys: {len(u)};")
+        # filter out keys with motion_module
+        m = list(filter(lambda x: 'motion_module' not in x, m))
+        # print(f"### missing keys:\n{m}\n### unexpected keys:\n{u}\n")
+
+        new_conv_in = torch.nn.Conv2d(12, model.conv_in.out_channels, model.conv_in.kernel_size, model.conv_in.stride, model.conv_in.padding)
+        torch.nn.init.zeros_(new_conv_in.weight)
+        new_conv_in.weight.data[:, :4, :, :] = model.conv_in.weight.data
+        new_conv_in.bias.data = model.conv_in.bias.data
+        model.conv_in = new_conv_in
+
+        last_model_file = os.path.join(last_model_path) if last_model_path is not None else None
+        if last_model_file is not None and os.path.isfile(last_model_file):
+            last_state_dict = load_file(last_model_file)
+            m, u = model.load_state_dict(last_state_dict, strict=False)
+            # print(f"### missing keys:\n{m}\n### unexpected keys:\n{u}\n")
+            print(f"### loaded last model from {last_model_file}")
+        
+        return model

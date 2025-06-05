@@ -403,7 +403,10 @@ class BasicTransformerBlock(nn.Module):
             # We currently only use AdaLayerNormZero for self attention where there will only be one attention block.
             # I.e. the number of returned modulation chunks from AdaLayerZero would not make sense if returned during
             # the second cross attention block.
-            self.norm2 = AdaLayerNorm(dim, num_embeds_ada_norm)
+            if norm_type == "ada_norm":
+                self.norm2 = AdaLayerNorm(dim, num_embeds_ada_norm)
+            else:
+                self.norm2 = nn.LayerNorm(dim, norm_eps, norm_elementwise_affine)
 
             self.attn2 = CrossAttention(
                 query_dim=dim,
@@ -416,7 +419,10 @@ class BasicTransformerBlock(nn.Module):
                 out_bias=attention_out_bias,
             )  # is self-attn if encoder_hidden_states is none
         else:
-            self.norm2 = None
+            if norm_type == "ada_norm_single":  # For Latte
+                self.norm2 = nn.LayerNorm(dim, norm_eps, norm_elementwise_affine)
+            else:
+                self.norm2 = None
             self.attn2 = None
 
         # 3. Feed-forward

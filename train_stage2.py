@@ -505,39 +505,42 @@ def main(args):
         revision=args.revision if args.pretrained_vae_model_name_or_path is None else None,
         variant=args.variant if args.pretrained_vae_model_name_or_path is None else None,
     )
-    unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant, use_safetensors=args.use_safetensors,
+    # unet = UNet2DConditionModel.from_pretrained(
+    #     args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant, use_safetensors=args.use_safetensors,
+    # )
+    unet = UNet2DConditionModel.from_pretrained_2d(
+        "/data2/lihaochen/models/stable-diffusion-xl-base-1.0/unet",
     )
 
     # if args.load_weights_increaments or args.save_weights_increaments:
     import copy
     orig_unet_sd = copy.deepcopy(unet.state_dict())
 
-    new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
-    torch.nn.init.zeros_(new_conv_in.weight)
-    new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
-    new_conv_in.bias.data = unet.conv_in.bias.data
-    unet.conv_in = new_conv_in
+    # new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
+    # torch.nn.init.zeros_(new_conv_in.weight)
+    # new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
+    # new_conv_in.bias.data = unet.conv_in.bias.data
+    # unet.conv_in = new_conv_in
 
-    if args.pretrained_unet_model_name_or_path:
-        logger.info("Loading existing unet weights")
-        unet_sd = load_file(args.pretrained_unet_model_name_or_path)
-        if args.load_weights_increaments:
-            logger.info("Loading unet weights in increaments")
-            for k in orig_unet_sd.keys():
-                if k in unet_sd:
-                    unet_sd[k] += orig_unet_sd[k]
-                else:
-                    unet_sd[k] = orig_unet_sd[k]
-        else:
-            logger.info("Loading unet weights")
-            for k in orig_unet_sd.keys():
-                if k not in unet_sd:
-                    unet_sd[k] = orig_unet_sd[k]
-        unet.load_state_dict(unet_sd)
-    else:
-        logger.info("Initializing unet weights from scratch")
-        pass
+    # if args.pretrained_unet_model_name_or_path:
+    #     logger.info("Loading existing unet weights")
+    #     unet_sd = load_file(args.pretrained_unet_model_name_or_path)
+    #     if args.load_weights_increaments:
+    #         logger.info("Loading unet weights in increaments")
+    #         for k in orig_unet_sd.keys():
+    #             if k in unet_sd:
+    #                 unet_sd[k] += orig_unet_sd[k]
+    #             else:
+    #                 unet_sd[k] = orig_unet_sd[k]
+    #     else:
+    #         logger.info("Loading unet weights")
+    #         for k in orig_unet_sd.keys():
+    #             if k not in unet_sd:
+    #                 unet_sd[k] = orig_unet_sd[k]
+    #     unet.load_state_dict(unet_sd)
+    # else:
+    #     logger.info("Initializing unet weights from scratch")
+    #     pass
 
     controlnext = ControlNext()
     if args.controlnext_model_name_or_path:
@@ -682,9 +685,10 @@ def main(args):
     unet.requires_grad_(True)
     unet_params = []
     pattern = re.compile(args.unet_trainable_param_pattern)
+    pattern2 = re.compile(".*motion_module.*")
     extra_save = ["conv_in.weight", "conv_in.bias"]
     for name, param in unet.named_parameters():
-        if pattern.match(name) or name in extra_save:
+        if pattern.match(name) or name in extra_save or pattern2.match(name):
             param.requires_grad = True
             unet_params.append(param)
         else:
@@ -878,6 +882,7 @@ def main(args):
     )
     loss_recorder = LossRecorder(gamma=0.9)
 
+    unet._set_static_graph()
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, controlnext, lightenc, consistency_mlp):
@@ -948,7 +953,7 @@ def main(args):
                     timesteps,
                 )
                 controls['scale'] *= args.controlnext_scale_factor
-                controls = None
+                # controls = None
 
                 added_conditions = batch["unet_added_conditions"]
                 enc_hid = torch.cat([batch["prompt_ids"], lighting], dim=1)
