@@ -1289,10 +1289,17 @@ class UNet2DConditionModel(
             controls = nn.functional.adaptive_avg_pool2d(controls, sample.shape[-2:])
             sample = sample + controls * scale
             # use for cross attention
+            h, w = sample.shape[-2:]
+            depth_attn_mask = {}
+            for i in range(3):
+                depth_control = nn.functional.adaptive_avg_pool2d(controls, (h // (2 ** i), w // (2 ** i)))
+                depth_control = rearrange(depth_control, "b c h w -> b (h w) c")
+                # calculate depth attention mask
+                depth_diff = torch.cdist(depth_control, depth_control, p=2)
+                depth_attention_mask = -depth_diff * 1.0
+                depth_attn_mask[h // (2 ** i)] = depth_attention_mask
             depth_control = nn.functional.adaptive_avg_pool2d(controls, (8, 8))
             depth_control = rearrange(depth_control, "b c h w -> b (h w) c")
-            depth_diff = torch.cdist(depth_control, depth_control, p=2)
-            depth_attention_mask = -depth_diff * 1.0
 
         for i, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
@@ -1309,10 +1316,16 @@ class UNet2DConditionModel(
                     cross_attention_kwargs=cross_attention_kwargs,
                     encoder_attention_mask=encoder_attention_mask,
                     depth_control=depth_control,
+                    depth_attn_mask=depth_attn_mask,
                     **additional_residuals,
                 )
             else:
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb, depth_control=depth_control)
+                sample, res_samples = downsample_block(
+                    hidden_states=sample,
+                    temb=emb,
+                    depth_control=depth_control,
+                    depth_attn_mask=depth_attn_mask,
+                )
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
                     sample += down_intrablock_additional_residuals.pop(0)
 
@@ -1340,9 +1353,10 @@ class UNet2DConditionModel(
                     cross_attention_kwargs=cross_attention_kwargs,
                     encoder_attention_mask=encoder_attention_mask,
                     depth_control=depth_control,
+                    depth_attn_mask=depth_attn_mask,
                 )
             else:
-                sample = self.mid_block(sample, emb, depth_control=depth_control)
+                sample = self.mid_block(sample, emb, depth_control=depth_control, depth_attn_mask=depth_attn_mask)
 
             # To support T2I-Adapter-XL
             if (
@@ -1378,6 +1392,7 @@ class UNet2DConditionModel(
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     depth_control=depth_control,
+                    depth_attn_mask=depth_attn_mask,
                 )
             else:
                 sample = upsample_block(
@@ -1386,6 +1401,7 @@ class UNet2DConditionModel(
                     res_hidden_states_tuple=res_samples,
                     upsample_size=upsample_size,
                     depth_control=depth_control,
+                    depth_attn_mask=depth_attn_mask,
                 )
 
         # 6. post-process

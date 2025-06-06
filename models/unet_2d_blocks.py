@@ -366,7 +366,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                 )[0]
                 if motion_module is not None:
                     hidden_states = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control
+                        create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control, depth_attn_mask
                     )
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(resnet),
@@ -383,7 +383,12 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
                 )[0]
-                hidden_states = motion_module(hidden_states, temb, encoder_hidden_states=depth_control) if motion_module is not None else hidden_states
+                hidden_states = motion_module(
+                    hidden_states,
+                    temb,
+                    encoder_hidden_states=depth_control,
+                    attention_mask=depth_attn_mask
+                ) if motion_module is not None else hidden_states
                 hidden_states = resnet(hidden_states, temb)
 
         return hidden_states
@@ -492,6 +497,7 @@ class CrossAttnDownBlock2D(nn.Module):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         additional_residuals: Optional[torch.Tensor] = None,
         depth_control: Optional[torch.Tensor] = None,
+        depth_attn_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
 
         output_states = ()
@@ -527,7 +533,7 @@ class CrossAttnDownBlock2D(nn.Module):
                 )[0]
                 if motion_module is not None:
                     hidden_states = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control
+                        create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control, depth_attn_mask
                     )
             else:
                 hidden_states = resnet(hidden_states, temb)
@@ -539,7 +545,12 @@ class CrossAttnDownBlock2D(nn.Module):
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
                 )[0]
-                hidden_states = motion_module(hidden_states, temb, encoder_hidden_states=depth_control) if motion_module is not None else hidden_states
+                hidden_states = motion_module(
+                    hidden_states,
+                    temb,
+                    encoder_hidden_states=depth_control,
+                    attention_mask=depth_attn_mask
+                ) if motion_module is not None else hidden_states
 
             # apply additional residuals to the output of the last pair of resnet and attention blocks
             if i == len(blocks) - 1 and additional_residuals is not None:
@@ -618,7 +629,12 @@ class DownBlock2D(nn.Module):
         self.gradient_checkpointing = False
 
     def forward(
-        self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None, depth_control: Optional[torch.Tensor] = None, *args, **kwargs
+        self,
+        hidden_states: torch.Tensor,
+        temb: Optional[torch.Tensor] = None,
+        depth_control: Optional[torch.Tensor] = None,
+        depth_attn_mask: Optional[torch.Tensor] = None,
+        *args, **kwargs
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
 
         output_states = ()
@@ -637,12 +653,16 @@ class DownBlock2D(nn.Module):
                 )
                 if motion_module is not None:
                     hidden_states = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control
+                        create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control, depth_attn_mask
                     )
             else:
                 hidden_states = resnet(hidden_states, temb)
-                hidden_states = motion_module(hidden_states, temb, encoder_hidden_states=depth_control) if motion_module is not None else hidden_states
-
+                hidden_states = motion_module(
+                    hidden_states,
+                    temb,
+                    encoder_hidden_states=depth_control,
+                    attention_mask=depth_attn_mask
+                ) if motion_module is not None else hidden_states
             output_states = output_states + (hidden_states,)
 
         if self.downsamplers is not None:
@@ -758,6 +778,7 @@ class CrossAttnUpBlock2D(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         depth_control: Optional[torch.Tensor] = None,
+        depth_attn_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
 
         for resnet, attn, motion_module in zip(self.resnets, self.attentions, self.motion_modules):
@@ -794,7 +815,7 @@ class CrossAttnUpBlock2D(nn.Module):
                     return_dict=False,
                 )[0]
                 if motion_module is not None:
-                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control)
+                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control, depth_attn_mask)
             else:
                 hidden_states = resnet(hidden_states, temb)
                 hidden_states = attn(
@@ -805,7 +826,12 @@ class CrossAttnUpBlock2D(nn.Module):
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
                 )[0]
-                hidden_states = motion_module(hidden_states, temb, encoder_hidden_states=depth_control) if motion_module is not None else hidden_states
+                hidden_states = motion_module(
+                    hidden_states,
+                    temb,
+                    encoder_hidden_states=depth_control,
+                    attention_mask=depth_attn_mask
+                ) if motion_module is not None else hidden_states
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
@@ -880,6 +906,7 @@ class UpBlock2D(nn.Module):
         temb: Optional[torch.Tensor] = None,
         upsample_size: Optional[int] = None,
         depth_control: Optional[torch.Tensor] = None,
+        depth_attn_mask: Optional[torch.Tensor] = None,
         *args,
         **kwargs,
     ) -> torch.Tensor:
@@ -903,10 +930,15 @@ class UpBlock2D(nn.Module):
                     create_custom_forward(resnet), hidden_states, temb, use_reentrant=False
                 )
                 if motion_module is not None:
-                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control)
+                    hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(motion_module), hidden_states.requires_grad_(), temb, depth_control, depth_attn_mask)
             else:
                 hidden_states = resnet(hidden_states, temb)
-                hidden_states = motion_module(hidden_states, temb, encoder_hidden_states=depth_control) if motion_module is not None else hidden_states
+                hidden_states = motion_module(
+                    hidden_states,
+                    temb,
+                    encoder_hidden_states=depth_control,
+                    attention_mask=depth_attn_mask
+                ) if motion_module is not None else hidden_states
 
 
         if self.upsamplers is not None:

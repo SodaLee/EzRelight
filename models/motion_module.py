@@ -316,11 +316,6 @@ class VersatileAttention(CrossAttention):
         value = self.reshape_heads_to_batch_dim(value)
 
         if attention_mask is not None:
-        #     if attention_mask.shape[-1] != query.shape[1]:
-        #         target_length = query.shape[1]
-        #         attention_mask = F.pad(attention_mask, (0, target_length), value=0.0)
-        #         attention_mask = attention_mask.repeat_interleave(self.heads, dim=0)
-        # else:
             if self.attention_mode == 'Depth':
                 # encoder_hidden_states is (b, n, c) # b * (8*8) * 320 -> q,k,v are b * n * inner_dim(in_channels)
                 # attention_mask is (b, n1, n2) # b * sequence_length * (8*8)
@@ -328,25 +323,13 @@ class VersatileAttention(CrossAttention):
                 # For Depth attention, we assume encoder_hidden_states is the depth map
                 # and we calculate the attention mask based on depth differences.
                 # attention_score is -\lambda |D_i - D_j|
-                # b, H, c = query.shape
-                # # 从 token 数量 H 推断目标空间大小 h × w
-                # assert H % 64 == 0, "query 的 token 数必须是 64 的倍数"
-                # scale = int((H // 64) ** 0.5)
-                # h = w = scale * 8
-                # assert h * w == H, "推断出的 h 和 w 与 query 尺寸不一致"
-                # # 将 encoder_hidden_states 变换成图像格式 (b, c, 8, 8)
-                # x = encoder_hidden_states.reshape(b, 8, 8, c).permute(0, 3, 1, 2)
-                # # 使用双线性插值放大到目标尺寸 (b, c, h, w)
-                # x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
-                # # 再变换成与 query 一致的格式 (b, h*w, c)
-                # encoder_hidden_states = x.permute(0, 2, 3, 1).reshape(b, h * w, c)
-                # if encoder_hidden_states is not None:
-                #     # Calculate the attention mask based on depth differences
-                #     depth_diff = torch.cdist(encoder_hidden_states, encoder_hidden_states, p=2)
-                #     attention_mask = -depth_diff * 1.0
-                #     attention_mask = attention_mask.view(batch_size, sequence_length, sequence_length)
-                #     attention_mask = None
-                attention_mask = None
+                b, H, c = query.shape
+                # 从 token 数量 H 推断目标空间大小 h × w
+                assert H % 64 == 0, "query 的 token 数必须是 64 的倍数"
+                scale = int((H // 64) ** 0.5)
+                h = w = scale * 8
+                assert h * w == H, "推断出的 h 和 w 与 query 尺寸不一致"
+                attention_mask = attention_mask[h]
 
         # attention, what we cannot get enough of
         if self._use_memory_efficient_attention_xformers:
