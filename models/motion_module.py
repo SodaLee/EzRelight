@@ -324,12 +324,8 @@ class VersatileAttention(CrossAttention):
                 # and we calculate the attention mask based on depth differences.
                 # attention_score is -\lambda |D_i - D_j|
                 b, H, c = query.shape
-                # 从 token 数量 H 推断目标空间大小 h × w
-                assert H % 64 == 0, "query 的 token 数必须是 64 的倍数"
-                scale = int((H // 64) ** 0.5)
-                h = w = scale * 8
-                assert h * w == H, "推断出的 h 和 w 与 query 尺寸不一致"
-                attention_mask = attention_mask[h]
+                attention_mask = attention_mask[H]
+                attention_mask = attention_mask.repeat_interleave(self.heads, dim=0)
 
         # attention, what we cannot get enough of
         if self._use_memory_efficient_attention_xformers:
