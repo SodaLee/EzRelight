@@ -401,6 +401,7 @@ def main(args):
         collate_fn=collate_fn,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
+        pin_memory=True,
     )
 
     image_logs = log_validation(
