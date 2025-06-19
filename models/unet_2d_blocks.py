@@ -25,7 +25,7 @@ from .motion_module import get_motion_module
 global_motion_module_kwargs = {
     "num_attention_heads": 8,
     "num_transformer_block": 1,
-    "attention_block_types": ["Depth_Cross"],
+    "attention_block_types": ["Depth_Self"],
     "temporal_position_encoding": True,
     "temporal_position_encoding_max_len": 24,
     "temporal_attention_dim_div": 1

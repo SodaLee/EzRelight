@@ -308,9 +308,13 @@ class VersatileAttention(CrossAttention):
         if self.added_kv_proj_dim is not None:
             raise NotImplementedError
 
-        encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
-        key = self.to_k(encoder_hidden_states)
-        value = self.to_v(encoder_hidden_states)
+        if self.is_cross_attention:
+            encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
+            key = self.to_k(encoder_hidden_states)
+            value = self.to_v(encoder_hidden_states)
+        else:
+            key = self.to_k(hidden_states)
+            value = self.to_v(hidden_states)
 
         key = self.reshape_heads_to_batch_dim(key)
         value = self.reshape_heads_to_batch_dim(value)

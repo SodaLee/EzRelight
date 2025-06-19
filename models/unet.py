@@ -1288,8 +1288,9 @@ class UNet2DConditionModel(
             controls = (controls - mean_control) * (std_latents / (std_control + 1e-12)) + mean_latents
             controls = nn.functional.adaptive_avg_pool2d(controls, sample.shape[-2:])
             sample = sample + controls * scale
-            depth_control = nn.functional.adaptive_avg_pool2d(controls, (8, 8))
-            depth_control = rearrange(depth_control, "b c h w -> b (h w) c")
+            # depth_control = nn.functional.adaptive_avg_pool2d(controls, (8, 8))
+            # depth_control = rearrange(depth_control, "b c h w -> b (h w) c")
+            depth_control = None
             # use for cross attention
             h, w = sample.shape[-2:]
             depth_attn_mask = {}
@@ -1298,8 +1299,8 @@ class UNet2DConditionModel(
                 depth_control_i = rearrange(depth_control_i, "b c h w -> b (h w) c")
                 depth_diff = torch.cdist(
                     depth_control_i,  # [b, h // (2 ** i) * w // (2 ** i), c]
-                    depth_control,    # [b, 64, c]
-                    p=2              # L1距离
+                    depth_control_i,    # [b, 64, c] or [b, h // (2 ** i) * w // (2 ** i), c]
+                    p=2              # L2距离
                 )
                 depth_attention_mask = -depth_diff * 1.0
                 # attention mask does not need gradient

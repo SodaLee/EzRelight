@@ -4,7 +4,7 @@ accelerate launch train_stage2.py \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
 --variant fp16 \
 --use_safetensors \
---output_dir "/data2/lihaochen/EzRelight_chps/stage2/try_0611_with_depthattn" \
+--output_dir "/data2/lihaochen/EzRelight_chps/stage2/try_0619_depthattnmask" \
 --logging_dir "logs" \
 --resolution 1024 \
 --gradient_checkpointing \
