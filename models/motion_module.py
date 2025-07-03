@@ -329,18 +329,61 @@ class VersatileAttention(CrossAttention):
                 # attention_score is -\lambda |D_i - D_j|
                 b, H, c = query.shape
                 attention_mask = attention_mask[H]
-                attention_mask = attention_mask.repeat_interleave(self.heads, dim=0)
-
-        # attention, what we cannot get enough of
-        if self._use_memory_efficient_attention_xformers:
-            hidden_states = self._memory_efficient_attention_xformers(query, key, value, attention_mask)
-            # Some versions of xformers return output in fp32, cast it back to the dtype of the input
-            hidden_states = hidden_states.to(query.dtype)
-        else:
-            if self._slice_size is None or query.shape[0] // self._slice_size == 1:
-                hidden_states = self._attention(query, key, value, attention_mask)
             else:
-                hidden_states = self._sliced_attention(query, key, value, sequence_length, dim, attention_mask)
+                attention_mask = None
+
+        if self.attention_mode == 'Depth':
+            # ========== Window Attention (window size=16) ===========
+            window_size = 8
+            B = hidden_states.shape[0]
+            N = hidden_states.shape[1]
+            C = hidden_states.shape[2]
+            H = W = int(N ** 0.5)
+            assert H * W == N, 'Feature map must be square for window attention.'
+            num_win_h = H // window_size
+            num_win_w = W // window_size
+            num_win = num_win_h * num_win_w * B
+            winN = window_size * window_size
+            # 分window
+            query_windows = rearrange(query.reshape(B, H, W, -1), 'b (nh wh) (nw ww) c -> (b nh nw) (wh ww) c', nh=num_win_h, nw=num_win_w, wh=window_size, ww=window_size)
+            key_windows = rearrange(key.reshape(B, H, W, -1), 'b (nh wh) (nw ww) c -> (b nh nw) (wh ww) c', nh=num_win_h, nw=num_win_w, wh=window_size, ww=window_size)
+            value_windows = rearrange(value.reshape(B, H, W, -1), 'b (nh wh) (nw ww) c -> (b nh nw) (wh ww) c', nh=num_win_h, nw=num_win_w, wh=window_size, ww=window_size)
+
+            # 批量计算所有window的attention
+            Q = query_windows  # [num_win, winN, c]
+            K = key_windows
+            V = value_windows
+            if attention_mask is not None:
+                mask = attention_mask  # [num_win, winN, winN]
+            else:
+                mask = None
+            scale = Q.shape[-1] ** -0.5
+            attn_logits = torch.baddbmm(
+                torch.empty(Q.shape[0], Q.shape[1], K.shape[1], dtype=Q.dtype, device=Q.device),
+                Q,
+                K.transpose(-1, -2),
+                beta=0,
+                alpha=scale,
+            )
+            if mask is not None:
+                attn_logits = attn_logits + mask
+            attn_weights = torch.softmax(attn_logits, dim=-1)
+            out = torch.bmm(attn_weights, V)  # [num_win, winN, c]
+            # 拼回原序列
+            out_2d = rearrange(out, '(b nh nw) (wh ww) c -> b (nh wh) (nw ww) c', b=B, nh=num_win_h, nw=num_win_w, wh=window_size, ww=window_size)
+            out_flat = out_2d.reshape(B, N, -1)
+            hidden_states = out_flat
+            # ========== End Window Attention ===========
+        else:
+            # 原有全局attention逻辑
+            if self._use_memory_efficient_attention_xformers:
+                hidden_states = self._memory_efficient_attention_xformers(query, key, value, attention_mask)
+                hidden_states = hidden_states.to(query.dtype)
+            else:
+                if self._slice_size is None or query.shape[0] // self._slice_size == 1:
+                    hidden_states = self._attention(query, key, value, attention_mask)
+                else:
+                    hidden_states = self._sliced_attention(query, key, value, sequence_length, dim, attention_mask)
 
         # linear proj
         hidden_states = self.to_out[0](hidden_states)

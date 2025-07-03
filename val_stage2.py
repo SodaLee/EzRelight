@@ -142,7 +142,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
             image = image.permute(1, 2, 0).cpu().numpy()
             image = (image * 255).astype(np.uint8)
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            save_dir_path = '/data1/lihaochen/Relight/stage2/val_nofusion'
+            save_dir_path = '/data1/lihaochen/Relight/stage2/val_attnmask'
             if not os.path.exists(save_dir_path):
                 os.makedirs(save_dir_path)
             person = batch["person"][0].split('/')[-1]
@@ -289,10 +289,10 @@ def prepare_train_dataset(dataset):
         soft_mask = [m for m in mask]
         # mask = [np.where(m > 0, 1, 0).astype(np.float32) for m in mask]
         img_depth = [np.load(depth) for depth in examples['img_depth']]
-        img_depth = [d + np.random.uniform(low=-1, high=50) for d in img_depth] # add noise to depth
+        # img_depth = [d + np.random.uniform(low=-1, high=50) for d in img_depth] # add noise to depth
         bg_depth = [np.load(depth) for depth in examples['bg_depth']]
-        depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
-        # depth = [np.load(depth) for depth in examples['fused_depth']]
+        # depth = [np.where(m != 0, d1, d2) for m, d1, d2 in zip(mask, img_depth, bg_depth)]
+        depth = [np.load(depth) for depth in examples['fused_depth']]
         
         mask = [np.expand_dims(m, axis=-1) for m in mask]
         mask = [conditioning_image_transforms(m) for m in mask]

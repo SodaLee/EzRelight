@@ -1294,17 +1294,34 @@ class UNet2DConditionModel(
             # use for cross attention
             h, w = sample.shape[-2:]
             depth_attn_mask = {}
-            for i in range(3):
-                depth_control_i = nn.functional.adaptive_avg_pool2d(controls, (h // (2 ** i), w // (2 ** i)))
-                depth_control_i = rearrange(depth_control_i, "b c h w -> b (h w) c")
-                depth_diff = torch.cdist(
-                    depth_control_i,  # [b, h // (2 ** i) * w // (2 ** i), c]
-                    depth_control_i,    # [b, 64, c] or [b, h // (2 ** i) * w // (2 ** i), c]
-                    p=2              # L2距离
-                )
-                depth_attention_mask = -depth_diff * 1.0
-                # attention mask does not need gradient
-                depth_attn_mask[h // (2 ** i) * w // (2 ** i)] = depth_attention_mask.detach()
+            for i in range(0, 3):
+                window_size = 8  # 与 motion_module 保持一致
+                H = h // (2 ** i)
+                W = w // (2 ** i)
+                num_win_h = H // window_size
+                num_win_w = W // window_size
+                winN = window_size * window_size
+                controls_win = nn.functional.adaptive_avg_pool2d(controls, (H, W))
+                # controls_win = rearrange(controls_win, "b c h w -> b (h w) c")  # [B, H*W, c]
+                B = controls_win.shape[0]
+                # 生成window内像素的全局索引
+                window_masks = []
+                for nh in range(num_win_h):
+                    for nw in range(num_win_w):
+                        h_idx_s = nh * window_size
+                        h_idx_e = (nh + 1) * window_size
+                        w_idx_s = nw * window_size
+                        w_idx_e = (nw + 1) * window_size
+
+                        # controls_win: [B, H*W, c], idx: [winN]
+                        window_feat = controls_win[:, :, h_idx_s:h_idx_e, w_idx_s:w_idx_e]
+                        window_feat = rearrange(window_feat, "b c h w -> b (h w) c")  # [B, winN, c]
+                        depth_diff = torch.cdist(window_feat, window_feat, p=2)  # [B, winN, winN]
+                        depth_attention_mask = -depth_diff * 1.0
+                        window_masks.append(depth_attention_mask.detach())
+                window_masks = torch.stack(window_masks, dim=1)  # [B, num_win, winN, winN]
+                window_masks = window_masks.view(-1, winN, winN)  # [B*num_win, winN, winN]
+                depth_attn_mask[H * W] = window_masks
 
         for i, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:

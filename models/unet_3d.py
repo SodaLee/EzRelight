@@ -1212,8 +1212,40 @@ class UNet3DConditionModel(
             controls = nn.functional.adaptive_avg_pool2d(controls, sample.shape[-2:])
             sample = sample + controls * scale
             # use for cross attention
-            depth_control = nn.functional.adaptive_avg_pool2d(controls, (8, 8))
-            depth_control = rearrange(depth_control, "b c h w -> b (h w) c")
+            # depth_control = nn.functional.adaptive_avg_pool2d(controls, (8, 8))
+            # depth_control = rearrange(depth_control, "b c h w -> b (h w) c")
+            depth_control = None
+            # use for cross attention
+            h, w = sample.shape[-2:]
+            depth_attn_mask = {}
+            for i in range(0, 3):
+                window_size = 8  # 与 motion_module 保持一致
+                H = h // (2 ** i)
+                W = w // (2 ** i)
+                num_win_h = H // window_size
+                num_win_w = W // window_size
+                winN = window_size * window_size
+                controls_win = nn.functional.adaptive_avg_pool2d(controls, (H, W))
+                # controls_win = rearrange(controls_win, "b c h w -> b (h w) c")  # [B, H*W, c]
+                B = controls_win.shape[0]
+                # 生成window内像素的全局索引
+                window_masks = []
+                for nh in range(num_win_h):
+                    for nw in range(num_win_w):
+                        h_idx_s = nh * window_size
+                        h_idx_e = (nh + 1) * window_size
+                        w_idx_s = nw * window_size
+                        w_idx_e = (nw + 1) * window_size
+
+                        # controls_win: [B, H*W, c], idx: [winN]
+                        window_feat = controls_win[:, :, h_idx_s:h_idx_e, w_idx_s:w_idx_e]
+                        window_feat = rearrange(window_feat, "b c h w -> b (h w) c")  # [B, winN, c]
+                        depth_diff = torch.cdist(window_feat, window_feat, p=2)  # [B, winN, winN]
+                        depth_attention_mask = -depth_diff * 1.0
+                        window_masks.append(depth_attention_mask.detach())
+                window_masks = torch.stack(window_masks, dim=1)  # [B, num_win, winN, winN]
+                window_masks = window_masks.view(-1, winN, winN)  # [B*num_win, winN, winN]
+                depth_attn_mask[H * W] = window_masks
             sample = rearrange(sample, "(b f) c h w -> b c f h w", f=video_length)
 
         for i, downsample_block in enumerate(self.down_blocks):
@@ -1351,7 +1383,7 @@ class UNet3DConditionModel(
         config['motion_module_kwargs'] = {
             "num_attention_heads": 8,
             "num_transformer_block": 1,
-            "attention_block_types": ["Depth_Cross", "Temporal_Self"],
+            "attention_block_types": ["Depth_Self", "Temporal_Self"],
             "temporal_position_encoding": True,
             "temporal_position_encoding_max_len": 24,
             "temporal_attention_dim_div": 1

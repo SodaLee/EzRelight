@@ -121,19 +121,24 @@ def get_pipeline(
         unet.conv_in = new_conv_in
         unet.load_state_dict(unet_sd, strict=True)
     else:
-        unet = UNet2DConditionModel.from_pretrained(
-            pretrained_model_name_or_path,
-            cache_dir=hf_cache_dir,
-            variant=variant,
-            torch_dtype=torch.float16,
-            use_safetensors=use_safetensors,
-            subfolder="unet",
+        # unet = UNet2DConditionModel.from_pretrained(
+        #     pretrained_model_name_or_path,
+        #     cache_dir=hf_cache_dir,
+        #     variant=variant,
+        #     torch_dtype=torch.float16,
+        #     use_safetensors=use_safetensors,
+        #     subfolder="unet",
+        # )
+        
+        # new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
+        # torch.nn.init.zeros_(new_conv_in.weight)
+        # new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
+        # new_conv_in.bias.data = unet.conv_in.bias.data
+        # unet.conv_in = new_conv_in
+
+        unet = UNet2DConditionModel.from_pretrained_2d(
+            "/data2/lihaochen/models/stable-diffusion-xl-base-1.0/unet",
         )
-        new_conv_in = torch.nn.Conv2d(12, unet.conv_in.out_channels, unet.conv_in.kernel_size, unet.conv_in.stride, unet.conv_in.padding)
-        torch.nn.init.zeros_(new_conv_in.weight)
-        new_conv_in.weight.data[:, :4, :, :] = unet.conv_in.weight.data
-        new_conv_in.bias.data = unet.conv_in.bias.data
-        unet.conv_in = new_conv_in
         
     unet = unet.to(dtype=torch.float16)
     pipeline_init_kwargs["unet"] = unet

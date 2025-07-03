@@ -146,25 +146,25 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
             f_name = file_names[j]
             video_name = f_name.split('/')[-3]
             frame_name = f_name.split('/')[-1].split('.')[0]
-            save_dir_path = '/data1/lihaochen/Relight/video/val'
+            save_dir_path = '/data1/lihaochen/Relight/video/val_attnmask'
             if not os.path.exists(save_dir_path):
                 os.makedirs(save_dir_path)
             file_path = os.path.join(save_dir_path, f"{video_name}_{frame_name}_{j}.png")
             cv2.imwrite(file_path, img)
         
-        for j in range(f):
-            gt = gts[j].permute(1, 2, 0).cpu().numpy()
-            gt = (gt * 255).astype(np.uint8)
-            gt = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
-            # '/data/lihaochen/datasets/TikTok_dataset/{video_name}/relight/{frame_name}.png'
-            f_name = file_names[j]
-            video_name = f_name.split('/')[-3]
-            frame_name = f_name.split('/')[-1].split('.')[0]
-            save_dir_path = '/data1/lihaochen/Relight/video/gt'
-            if not os.path.exists(save_dir_path):
-                os.makedirs(save_dir_path)
-            file_path = os.path.join(save_dir_path, f"{video_name}_{frame_name}_{j}.png")
-            cv2.imwrite(file_path, gt)
+        # for j in range(f):
+        #     gt = gts[j].permute(1, 2, 0).cpu().numpy()
+        #     gt = (gt * 255).astype(np.uint8)
+        #     gt = cv2.cvtColor(gt, cv2.COLOR_RGB2BGR)
+        #     # '/data/lihaochen/datasets/TikTok_dataset/{video_name}/relight/{frame_name}.png'
+        #     f_name = file_names[j]
+        #     video_name = f_name.split('/')[-3]
+        #     frame_name = f_name.split('/')[-1].split('.')[0]
+        #     save_dir_path = '/data1/lihaochen/Relight/video/gt'
+        #     if not os.path.exists(save_dir_path):
+        #         os.makedirs(save_dir_path)
+        #     file_path = os.path.join(save_dir_path, f"{video_name}_{frame_name}_{j}.png")
+        #     cv2.imwrite(file_path, gt)
 
     gc.collect()
     if str(device) == 'cuda' and torch.cuda.is_available():
