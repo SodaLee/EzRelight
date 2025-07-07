@@ -137,7 +137,7 @@ def get_pipeline(
         # unet.conv_in = new_conv_in
 
         unet = UNet2DConditionModel.from_pretrained_2d(
-            "/data2/lihaochen/models/stable-diffusion-xl-base-1.0/unet",
+            "/data2/lihaochen/models/stable-diffusion-xl-base-1.0/unet", last_model_path=unet_model_name_or_path,
         )
         
     unet = unet.to(dtype=torch.float16)
@@ -184,15 +184,15 @@ def get_pipeline(
         )
 
     pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
-    if unet_model_name_or_path is not None:
-        print(f"loading controlnext unet from {unet_model_name_or_path}")
-        pipeline.load_controlnext_unet_weights(
-            unet_model_name_or_path,
-            load_weight_increasement=load_weight_increasement,
-            use_safetensors=True,
-            torch_dtype=torch.float16,
-            cache_dir=hf_cache_dir,
-        )
+    # if unet_model_name_or_path is not None:
+    #     print(f"loading controlnext unet from {unet_model_name_or_path}")
+    #     pipeline.load_controlnext_unet_weights(
+    #         unet_model_name_or_path,
+    #         load_weight_increasement=load_weight_increasement,
+    #         use_safetensors=True,
+    #         torch_dtype=torch.float16,
+    #         cache_dir=hf_cache_dir,
+    #     )
     if controlnext_model_name_or_path is not None:
         print(f"loading controlnext controlnext from {controlnext_model_name_or_path}")
         pipeline.load_controlnext_controlnext_weights(

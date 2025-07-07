@@ -1293,6 +1293,7 @@ class UNet2DConditionModel(
             depth_control = None
             # use for cross attention
             h, w = sample.shape[-2:]
+            depth_attn_mask = None
             depth_attn_mask = {}
             for i in range(0, 3):
                 window_size = 8  # 与 motion_module 保持一致
