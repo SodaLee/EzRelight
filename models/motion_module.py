@@ -321,19 +321,13 @@ class VersatileAttention(CrossAttention):
 
         if attention_mask is not None:
             if self.attention_mode == 'Depth':
-                # encoder_hidden_states is (b, n, c) # b * (8*8) * 320 -> q,k,v are b * n * inner_dim(in_channels)
-                # attention_mask is (b, n1, n2) # b * sequence_length * (8*8)
-                # attention_mask is None, we will calculate it based on depth differences
-                # For Depth attention, we assume encoder_hidden_states is the depth map
-                # and we calculate the attention mask based on depth differences.
-                # attention_score is -\lambda |D_i - D_j|
                 b, H, c = query.shape
                 attention_mask = attention_mask[H]
             else:
                 attention_mask = None
 
         if self.attention_mode == 'Depth':
-            # ========== Window Attention (window size=16) ===========
+            # ========== Window Attention (window size=8) ===========
             window_size = 8
             B = hidden_states.shape[0]
             N = hidden_states.shape[1]
@@ -342,21 +336,33 @@ class VersatileAttention(CrossAttention):
             assert H * W == N, 'Feature map must be square for window attention.'
             num_win_h = H // window_size
             num_win_w = W // window_size
-            num_win = num_win_h * num_win_w * B
+            N_w = num_win_h * num_win_w
             winN = window_size * window_size
-            # 分window
-            query_windows = rearrange(query.reshape(B, H, W, -1), 'b (nh wh) (nw ww) c -> (b nh nw) (wh ww) c', nh=num_win_h, nw=num_win_w, wh=window_size, ww=window_size)
-            key_windows = rearrange(key.reshape(B, H, W, -1), 'b (nh wh) (nw ww) c -> (b nh nw) (wh ww) c', nh=num_win_h, nw=num_win_w, wh=window_size, ww=window_size)
-            value_windows = rearrange(value.reshape(B, H, W, -1), 'b (nh wh) (nw ww) c -> (b nh nw) (wh ww) c', nh=num_win_h, nw=num_win_w, wh=window_size, ww=window_size)
-
-            # 批量计算所有window的attention
-            Q = query_windows  # [num_win, winN, c]
-            K = key_windows
-            V = value_windows
+            # 分window，先将c移到batch后
+            query_2d = query.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()  # [B, C, H, W]
+            key_2d = key.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+            value_2d = value.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+            # unfold H, 再 unfold W
+            query_unfold = query_2d.unfold(2, window_size, window_size).unfold(3, window_size, window_size)
+            key_unfold = key_2d.unfold(2, window_size, window_size).unfold(3, window_size, window_size)
+            value_unfold = value_2d.unfold(2, window_size, window_size).unfold(3, window_size, window_size)
+            # [B, C, num_win_h, num_win_w, window_size, window_size]
+            # 展平为 [B, C, N_w, winN]
+            query_windows = query_unfold.contiguous().view(B, C, N_w, winN)
+            key_windows = key_unfold.contiguous().view(B, C, N_w, winN)
+            value_windows = value_unfold.contiguous().view(B, C, N_w, winN)
+            # 合并B和C，得到 [B*C*N_w, winN]
+            query_windows = query_windows.permute(0, 2, 3, 1).reshape(B, N_w, winN*C)
+            key_windows = key_windows.permute(0, 2, 3, 1).reshape(B, N_w, winN*C)
+            value_windows = value_windows.permute(0, 2, 3, 1).reshape(B, N_w, winN*C)
+            # mask: [B, N_w, winN, winN]，取出每个window的mask
             if attention_mask is not None:
-                mask = attention_mask  # [num_win, winN, winN]
+                mask = attention_mask
             else:
                 mask = None
+            Q = query_windows
+            K = key_windows
+            V = value_windows 
             scale = Q.shape[-1] ** -0.5
             attn_logits = torch.baddbmm(
                 torch.empty(Q.shape[0], Q.shape[1], K.shape[1], dtype=Q.dtype, device=Q.device),
@@ -368,11 +374,10 @@ class VersatileAttention(CrossAttention):
             if mask is not None:
                 attn_logits = attn_logits + mask
             attn_weights = torch.softmax(attn_logits, dim=-1)
-            out = torch.bmm(attn_weights, V)  # [num_win, winN, c]
+            out = torch.bmm(attn_weights, V)  # [B*N_w, winN, c]
             # 拼回原序列
-            out_2d = rearrange(out, '(b nh nw) (wh ww) c -> b (nh wh) (nw ww) c', b=B, nh=num_win_h, nw=num_win_w, wh=window_size, ww=window_size)
-            out_flat = out_2d.reshape(B, N, -1)
-            hidden_states = out_flat
+            out_2d = out.view(B, num_win_h, num_win_w, window_size, window_size, -1).permute(0,1,3,2,4,5).contiguous().reshape(B, N, -1)
+            hidden_states = out_2d
             # ========== End Window Attention ===========
         else:
             # 原有全局attention逻辑

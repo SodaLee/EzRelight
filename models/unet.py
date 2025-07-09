@@ -1294,35 +1294,57 @@ class UNet2DConditionModel(
             # use for cross attention
             h, w = sample.shape[-2:]
             depth_attn_mask = None
+            # depth_attn_mask = {}
+            # for i in range(0, 3):
+            #     window_size = 8  # 与 motion_module 保持一致
+            #     H = h // (2 ** i)
+            #     W = w // (2 ** i)
+            #     num_win_h = H // window_size
+            #     num_win_w = W // window_size
+            #     winN = window_size * window_size
+            #     controls_win = nn.functional.adaptive_avg_pool2d(controls, (H, W))
+            #     # controls_win = rearrange(controls_win, "b c h w -> b (h w) c")  # [B, H*W, c]
+            #     B = controls_win.shape[0]
+            #     # 生成window内像素的全局索引
+            #     window_masks = []
+            #     for nh in range(num_win_h):
+            #         for nw in range(num_win_w):
+            #             h_idx_s = nh * window_size
+            #             h_idx_e = (nh + 1) * window_size
+            #             w_idx_s = nw * window_size
+            #             w_idx_e = (nw + 1) * window_size
+
+            #             # controls_win: [B, H*W, c], idx: [winN]
+            #             window_feat = controls_win[:, :, h_idx_s:h_idx_e, w_idx_s:w_idx_e]
+            #             window_feat = rearrange(window_feat, "b c h w -> b (h w) c")  # [B, winN, c]
+            #             depth_diff = torch.cdist(window_feat, window_feat, p=2)  # [B, winN, winN]
+            #             depth_attention_mask = -depth_diff * 1.0
+            #             window_masks.append(depth_attention_mask.detach())
+            #     window_masks = torch.stack(window_masks, dim=1)  # [B, num_win, winN, winN]
+            #     window_masks = window_masks.view(-1, winN, winN)  # [B*num_win, winN, winN]
+            #     depth_attn_mask[H * W] = window_masks
             depth_attn_mask = {}
-            for i in range(0, 3):
-                window_size = 8  # 与 motion_module 保持一致
+            for i in range(3):
+                window_size = 8  # 可根据需要调整
                 H = h // (2 ** i)
                 W = w // (2 ** i)
+                assert H % window_size == 0 and W % window_size == 0, "H, W必须能被window_size整除"
+                # 计算窗口数量
                 num_win_h = H // window_size
                 num_win_w = W // window_size
-                winN = window_size * window_size
+                N_w = num_win_h * num_win_w
                 controls_win = nn.functional.adaptive_avg_pool2d(controls, (H, W))
-                # controls_win = rearrange(controls_win, "b c h w -> b (h w) c")  # [B, H*W, c]
-                B = controls_win.shape[0]
-                # 生成window内像素的全局索引
-                window_masks = []
-                for nh in range(num_win_h):
-                    for nw in range(num_win_w):
-                        h_idx_s = nh * window_size
-                        h_idx_e = (nh + 1) * window_size
-                        w_idx_s = nw * window_size
-                        w_idx_e = (nw + 1) * window_size
-
-                        # controls_win: [B, H*W, c], idx: [winN]
-                        window_feat = controls_win[:, :, h_idx_s:h_idx_e, w_idx_s:w_idx_e]
-                        window_feat = rearrange(window_feat, "b c h w -> b (h w) c")  # [B, winN, c]
-                        depth_diff = torch.cdist(window_feat, window_feat, p=2)  # [B, winN, winN]
-                        depth_attention_mask = -depth_diff * 1.0
-                        window_masks.append(depth_attention_mask.detach())
-                window_masks = torch.stack(window_masks, dim=1)  # [B, num_win, winN, winN]
-                window_masks = window_masks.view(-1, winN, winN)  # [B*num_win, winN, winN]
-                depth_attn_mask[H * W] = window_masks
+                B, C = controls_win.shape[0:2]
+                # 划分窗口并展平
+                controls_reshaped = controls_win.unfold(2, window_size, window_size).unfold(3, window_size, window_size)
+                # controls_reshaped: [B, C, num_win_h, num_win_w, window_size, window_size]
+                controls_reshaped = controls_reshaped.permute(0, 2, 3, 1, 4, 5)
+                # [B, num_win_h, num_win_w, C, window_size, window_size]
+                controls_windows = controls_reshaped.reshape(B, N_w, C * window_size * window_size)
+                # [B, N_w, S*S*C]
+                # 计算两两窗口间的欧氏距离平方
+                mask = torch.cdist(controls_windows, controls_windows, p=2).detach()  # [B, N_w, N_w]
+                depth_attn_mask[H * W] = -mask * 1.0  # 负值用于attention mask
 
         for i, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
