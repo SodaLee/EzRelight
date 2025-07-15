@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 配置参数（修改这里）
-GPUS=(4 7)          # 要监控的GPU编号（可修改）
+GPUS=(4 5)          # 要监控的GPU编号（可修改）
 MEMORY_THRESHOLD=1000 # 显存使用阈值MB（建议50-100）
 UTIL_THRESHOLD=5    # GPU利用率阈值%（建议1-5）
 CHECK_INTERVAL=60   # 检查间隔秒数（建议60）

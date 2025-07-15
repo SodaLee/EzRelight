@@ -10,7 +10,7 @@ import piq
 import tqdm
 from omegaconf import DictConfig, OmegaConf
 from rich.progress import track
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 from fid_metrics import (
     ImageDataset,
