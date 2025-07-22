@@ -131,7 +131,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
             image = image.permute(1, 2, 0).cpu().numpy()
             image = (image * 255).astype(np.uint8)
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            save_dir_path = '/data1/lihaochen/Relight/stage2/test_attnmask_soft'
+            save_dir_path = '/data1/lihaochen/Relight/stage2/test_attnmask_hard'
             if not os.path.exists(save_dir_path):
                 os.makedirs(save_dir_path)
             person = batch["person"][0].split('/')[-1]
@@ -290,6 +290,8 @@ def adjust_and_fuse_depth(
 ):
     fg_h, fg_w = foreground_depth.shape
     bg_crop = align_and_crop_bg(background_depth, fg_crop_params, bg_crop_params, (fg_h, fg_w), fill_mode=fill_mode)
+    #===============================================
+    # 使用平均值融合
     bottom_mask = np.zeros_like(foreground_mask, dtype=bool)
     rows, cols = np.where(foreground_mask == 1)
     if len(rows) == 0:
@@ -307,6 +309,11 @@ def adjust_and_fuse_depth(
     adjusted_fg[foreground_mask == 1] += depth_diff
     fused = bg_crop.copy()
     fused[foreground_mask == 1] = adjusted_fg[foreground_mask == 1]
+    #===============================================
+    # 使用最大值融合
+    # fused = bg_crop.copy()
+    # fused[foreground_mask == 1] = foreground_depth[foreground_mask == 1]
+
     return fused
 
 def prepare_train_dataset(dataset):

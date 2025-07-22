@@ -1,10 +1,10 @@
-CUDA_VISIBLE_DEVICES="2,3" \
+CUDA_VISIBLE_DEVICES="6,7" \
 accelerate launch train_video.py \
 --pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \
 --variant fp16 \
 --use_safetensors \
---output_dir "/data2/lihaochen/EzRelight_chps/video/try_0629_depthattnmask" \
+--output_dir "/data2/lihaochen/EzRelight_chps/video/try_0722_depthattnmask" \
 --logging_dir "logs" \
 --resolution 1024 \
 --gradient_checkpointing \
@@ -21,4 +21,4 @@ accelerate launch train_video.py \
 --cache_dir "/data3/lihaochen/BGRelight/video_cache" \
 --caption_column "caption" \
 --lr_scheduler "polynomial" --lr_power 0.98 \
---stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage2/try_0619_depthattnmask/checkpoints/final"
+--stage1_chp_path "/data2/lihaochen/EzRelight_chps/stage2/try_0709_depthattnmask/checkpoints/final"
