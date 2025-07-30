@@ -131,7 +131,7 @@ def log_validation(args, weight_dtype, dataloader, device='cuda'):
             image = image.permute(1, 2, 0).cpu().numpy()
             image = (image * 255).astype(np.uint8)
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            save_dir_path = '/data1/lihaochen/Relight/stage2/test_attnmask_hard'
+            save_dir_path = '/data1/lihaochen/Relight/stage2/test_attnmask_wimg'
             if not os.path.exists(save_dir_path):
                 os.makedirs(save_dir_path)
             person = batch["person"][0].split('/')[-1]
@@ -360,7 +360,7 @@ def prepare_train_dataset(dataset):
     )
 
     def preprocess_train(examples):
-        source = [cv2.imread(source, cv2.IMREAD_UNCHANGED) for source in examples['source']]
+        source = [cv2.imread(source.replace('relight.png', 'img.png'), cv2.IMREAD_UNCHANGED) for source in examples['source']]
         source = [cv2.cvtColor(s, cv2.COLOR_BGR2RGB) for s in source]
         # 获取前景和背景的原图shape
         img_depth_raw = [np.load(depth) for depth in examples['img_depth']]

@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES="7" \
+CUDA_VISIBLE_DEVICES="6" \
 accelerate launch test_stage2.py \
 --pretrained_model_name_or_path "stabilityai/stable-diffusion-xl-base-1.0" \
 --pretrained_vae_model_name_or_path "madebyollin/sdxl-vae-fp16-fix" \

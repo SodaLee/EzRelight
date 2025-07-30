@@ -1,7 +1,7 @@
 import pandas as pd
 
 # 读取parquet文件
-df = pd.read_parquet('./stage2_test.parquet')
+df = pd.read_parquet('./stage2_inthewild.parquet')
 
 def query_by_img_file(img_file):
     # 查找person字段以/{img_file}结尾的行
